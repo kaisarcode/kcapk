@@ -1,6 +1,6 @@
 /**
  * redp2p demo app script.
- * Summary: Controls redp2p tunnels through the KcSplash runner interface.
+ * Summary: Exercises the redp2p runner through the AndroidBridge.
  * Author:  KaisarCode
  * Website: https://kaisarcode.com
  * License: GNU General Public License v3.0
@@ -13,9 +13,11 @@
 
     var output = document.getElementById('output');
     var status = document.getElementById('status');
+    var currentHandle = null;
+    var INDEX_PORT = 9001;
 
     /**
-     * Sets the status text in the footer.
+     * Sets the status text in the header.
      * @param text Status text.
      * @return 0 on success.
      */
@@ -30,14 +32,14 @@
      * @return 0 on success.
      */
     function log(text) {
-        if (output) output.textContent = text + '\n';
+        if (output) output.textContent += text + '\n';
         console.log('LOG: ' + text);
     }
 
     /**
-     * Runs a redp2p command through the native bridge.
+     * Runs one redp2p runner command through the native bridge.
      * @param cmd Command name.
-     * @param args Command arguments.
+     * @param args Command arguments object.
      * @return Parsed result JSON, or null on failure.
      */
     function runCommand(cmd, args) {
@@ -61,143 +63,108 @@
     }
 
     /**
-     * Opens a redp2p operation and returns the handle.
-     * @param op Operation name.
-     * @param args Operation arguments.
-     * @return Handle string, or null on failure.
+     * Starts the local index server.
+     * @param port Index port.
+     * @return Runner handle, or null on failure.
      */
-    function runOpen(op, args) {
-        var payload = {cmd: 'open', args: args};
-        var result = runCommand('open', args);
-        if (!result) return null;
-        try {
-            var parsed = JSON.parse(result);
-            if (parsed.result && parsed.result.handle) {
-                return parsed.result.handle;
-            }
-        } catch (e) {
-            log('error parsing open result: ' + result);
-        }
-        return null;
-    }
-
-    /**
-     * Reads the status of a redp2p operation.
-     * @param handle Operation handle.
-     * @return Status result JSON, or null on failure.
-     */
-    function runStatus(handle) {
-        var result = runCommand('status', {handle: handle});
-        if (!result) return null;
-        try {
-            return JSON.parse(result);
-        } catch (e) {
-            log('error parsing status: ' + result);
+    function startIndex(port) {
+        log('Auto-test: start index on port ' + port + '...');
+        var result = runCommand('open', {op: 'idx', port: port});
+        if (!result || !result.handle) {
+            log('start index failed');
             return null;
         }
+        currentHandle = result.handle;
+        log('Index started, handle: ' + result.handle);
+        return result.handle;
     }
 
     /**
-     * Stops a redp2p operation.
-     * @param handle Operation handle.
-     * @return Result JSON, or null on failure.
-     */
-    function runStop(handle) {
-        var result = runCommand('stop', {handle: handle});
-        if (!result) return null;
-        try {
-            return JSON.parse(result);
-        } catch (e) {
-            log('error parsing stop: ' + result);
-            return null;
-        }
-    }
-
-    /**
-     * Closes a redp2p operation.
-     * @param handle Operation handle.
-     * @return Result JSON, or null on failure.
-     */
-    function runClose(handle) {
-        var result = runCommand('close', {handle: handle});
-        if (!result) return null;
-        try {
-            return JSON.parse(result);
-        } catch (e) {
-            log('error parsing close: ' + result);
-            return null;
-        }
-    }
-
-    /**
-     * Lists publishers on an index server.
+     * Lists publishers registered on the index.
      * @param host Index host.
      * @param port Index port.
-     * @return List result JSON, or null on failure.
+     * @return Parsed result, or null on failure.
      */
-    function runList(host, port) {
+    function listPublishers(host, port) {
+        log('Auto-test: list publishers on ' + host + ':' + port + '...');
         var result = runCommand('list', {host: host, port: port});
-        if (!result) return null;
-        try {
-            return JSON.parse(result);
-        } catch (e) {
-            log('error parsing list: ' + result);
+        if (!result || !result.result) {
+            log('list failed');
             return null;
         }
-    }
-
-    /**
-     * Polls an operation until it finishes.
-     * @param handle Operation handle.
-     * @return 0 on success.
-     */
-    function pollStatus(handle) {
-        var status = runStatus(handle);
-        if (status) {
-            if (status.result && status.result.state === 'finished') {
-                log('Operation finished with result: ' + JSON.stringify(status.result.result));
-                if (status.result.error) {
-                    log('Error: ' + status.result.error);
-                }
-                return;
-            }
-            if (status.result && status.result.state === 'running') {
-                setTimeout(function () { pollStatus(handle); }, 1000);
-            }
-        }
-    }
-
-    /**
-     * Runs the local index list test.
-     * @return 0 on success.
-     */
-    function testLocalList() {
-        log('Auto-test: Local Index List...');
-        var testResult = runCommand('list', {host: '127.0.0.1', port: 9001});
-        if (testResult && testResult.result && testResult.result.publishers) {
-            log('Publishers:\n' + testResult.result.publishers.join('\n'));
-        } else if (testResult) {
-            log('List result: ' + JSON.stringify(testResult));
+        if (result.result.publishers) {
+            log('Publishers: ' + result.result.publishers.length);
         } else {
-            log('Index list test failed');
+            log('List result: ' + JSON.stringify(result.result));
         }
+        return result;
     }
 
     /**
-     * Runs the local index open test.
-     * @return 0 on success.
+     * Reads the status of one runner operation.
+     * @param handle Runner handle.
+     * @return Status result object, or null on failure.
      */
-    function testOpenLocal() {
-        log('Auto-test: Open Local Index...');
-        var handle = runOpen('idx', {port: 9001});
-        if (handle) {
-            log('Index opened, handle: ' + handle);
-            pollStatus(handle);
-        } else {
-            log('Failed to open local index');
+    function readStatus(handle) {
+        var result = runCommand('status', {handle: handle});
+        if (!result || !result.result) {
+            log('status failed');
+            return null;
         }
+        log('Status: ' + JSON.stringify(result.result));
+        return result.result;
     }
 
-    testLocalList();
-    setTimeout(testOpenLocal, 2000);
+    /**
+     * Stops one runner operation.
+     * @param handle Runner handle.
+     * @return 0 on success.
+     */
+    function stopOperation(handle) {
+        log('Auto-test: stop handle ' + handle + '...');
+        var result = runCommand('stop', {handle: handle});
+        if (!result) {
+            log('stop failed');
+            return 1;
+        }
+        log('Stop result: ' + JSON.stringify(result.result));
+        return 0;
+    }
+
+    /**
+     * Closes one runner handle.
+     * @param handle Runner handle.
+     * @return 0 on success.
+     */
+    function closeHandle(handle) {
+        log('Auto-test: close handle ' + handle + '...');
+        var result = runCommand('close', {handle: handle});
+        if (!result) {
+            log('close failed');
+            return 1;
+        }
+        log('Close result: ' + JSON.stringify(result.result));
+        currentHandle = null;
+        return 0;
+    }
+
+    /**
+     * Runs the full index lifecycle test.
+     * @return 0 on success.
+     */
+    function runIndexTest() {
+        var handle = startIndex(INDEX_PORT);
+        if (handle === null) return 1;
+
+        setTimeout(function () {
+            readStatus(handle);
+            listPublishers('127.0.0.1', INDEX_PORT);
+            stopOperation(handle);
+            closeHandle(handle);
+            setStatus('All tests done');
+        }, 1500);
+        return 0;
+    }
+
+    runIndexTest();
 })();
