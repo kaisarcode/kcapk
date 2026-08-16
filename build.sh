@@ -582,7 +582,10 @@ cp -r "$ASSETS_SOURCE/." "$ASSETS_DIR/www/"
 echo "Computing embedded assets fingerprint..."
 WWW_VERSION="$( (cd "$ASSETS_DIR/www" && find . -type f | sort | while IFS= read -r F; do printf '%s|%s\n' "${F#./}" "$(sha256 "$F")"; done) | sha256sum | awk '{print $1}' )"
 printf '%s\n' "$WWW_VERSION" > "$ASSETS_DIR/www.version"
+BUILD_TIMESTAMP="$(date -u +%s)"
+printf '%s\n' "$BUILD_TIMESTAMP" > "$ASSETS_DIR/www.build_timestamp"
 echo "www fingerprint: $WWW_VERSION"
+echo "www build timestamp: $BUILD_TIMESTAMP"
 
 JAVA_TRUSTED_ORIGINS=""
 for ORIGIN in $TRUSTED_ORIGINS; do
@@ -810,7 +813,12 @@ public class Provisioner {
                     + " (using local cache)");
         }
 
-        return new File(filesDir, start).toURI().toString();
+        // File.toURI() returns file:/path (single slash), fix to file:///path (triple slash)
+        String uri = new File(filesDir, start).toURI().toString();
+        if (uri.startsWith("file:/") && !uri.startsWith("file:///")) {
+            uri = "file://" + uri.substring(6);
+        }
+        return uri;
     }
 
     // Loads libjni.so from codeCacheDir on first use so that JSBridge can
@@ -855,6 +863,18 @@ public class Provisioner {
     private static List<Pending> planWork(JSONObject kclibManifest, JSONObject appManifest,
             File nativeDir, File filesDir, String arch) throws IOException {
         List<Pending> pending = new ArrayList<Pending>();
+
+        // Read embedded build timestamp to compare with server manifest
+        long embeddedBuildTimestamp = 0;
+        try {
+            String ts = readFileToString(new File(filesDir, "www.build_timestamp"));
+            if (!ts.isEmpty()) {
+                embeddedBuildTimestamp = Long.parseLong(ts.trim());
+            }
+        } catch (Exception ignored) {}
+
+        // Read server manifest timestamp
+        long serverManifestTimestamp = appManifest.optLong("timestamp", 0);
 
         JSONArray deps = appManifest.optJSONArray("kclib");
         if (deps != null && deps.length() > 0) {
@@ -916,6 +936,22 @@ public class Provisioner {
                 if (isUpToDate(target, sha)) {
                     continue;
                 }
+                // If server manifest is older than embedded build, and file exists locally,
+                // skip download (keep embedded version)
+                if (serverManifestTimestamp > 0 && embeddedBuildTimestamp > 0
+                        && serverManifestTimestamp < embeddedBuildTimestamp
+                        && target.isFile()) {
+                    Log.i(TAG, "asset up to date (embedded newer): " + path
+                            + " server=" + serverManifestTimestamp
+                            + " embedded=" + embeddedBuildTimestamp);
+                    continue;
+                }
+                Log.i(TAG, "asset check timestamps: " + path
+                        + " server=" + serverManifestTimestamp
+                        + " embedded=" + embeddedBuildTimestamp
+                        + " skip=" + (serverManifestTimestamp > 0 && embeddedBuildTimestamp > 0
+                                && serverManifestTimestamp < embeddedBuildTimestamp
+                                && target.isFile()));
                 target.getParentFile().mkdirs();
                 Log.i(TAG, "asset to install: " + path);
                 pending.add(new Pending(
@@ -1044,6 +1080,13 @@ public class Provisioner {
             if (wwwDir.mkdirs()) {
                 copyAssetDir(am, "www", wwwDir);
                 writeStringToFile(new File(filesDir, "www.version"), embeddedVersion);
+                // Also copy the build timestamp
+                try {
+                    String embeddedTimestamp = readStreamToString(am.open("www.build_timestamp"));
+                    writeStringToFile(new File(filesDir, "www.build_timestamp"), embeddedTimestamp);
+                } catch (IOException ignored) {
+                    // build_timestamp may not exist in older builds
+                }
                 Log.i(TAG, "embedded www copied to " + wwwDir);
             }
         } catch (IOException e) {
@@ -1727,13 +1770,17 @@ $FULLSCREEN_SETUP
                     Log.e(TAG, "provision failed", e);
                 }
 
+                Log.d(TAG, "Provisioning thread done, posting to handler");
                 handler.post(new Runnable() {
                     @Override
                     public void run() {
+                        Log.d(TAG, "Handler callback executing, result[0]=" + result[0] + " result[1]=" + result[1]);
                         if (result[0] != null) {
                             homeUrl = result[0];
+                            Log.d(TAG, "Loading home URL: " + result[0]);
                             webView.loadUrl(result[0]);
                         } else {
+                            Log.e(TAG, "Provisioning failed: " + result[1]);
                             webView.loadDataWithBaseURL("file:///android_asset/",
                                     errorPage(result[1]), "text/html", "UTF-8", null);
                             webView.clearHistory();
