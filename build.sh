@@ -443,13 +443,13 @@ publish () {
 
     [ -d "$ASSETS_SOURCE" ] || { echo "error: assets directory not found: $ASSETS_SOURCE" >&2; exit 1; }
 
-    rm -rf "$PUBLISH_DIR"
-    mkdir -p "$PUBLISH_DIR/www"
+rm -rf "$PUBLISH_DIR"
+mkdir -p "$PUBLISH_DIR/www"
 
-    cp -r "$ASSETS_SOURCE/." "$PUBLISH_DIR/www/"
-    if [ -d "$COMMON_ASSETS_DIR" ]; then
-        cp -r "$COMMON_ASSETS_DIR/." "$PUBLISH_DIR/www/"
-    fi
+if [ -d "$COMMON_ASSETS_DIR" ]; then
+    cp -r "$COMMON_ASSETS_DIR/." "$PUBLISH_DIR/www/"
+fi
+cp -r "$ASSETS_SOURCE/." "$PUBLISH_DIR/www/"
 
     APK_PUBLISHED="$PUBLISH_DIR/$PROJECT_NAME.apk"
     if [ -f "$DEBUG_APK_FILE" ]; then
@@ -459,12 +459,12 @@ publish () {
         APK_PUBLISHED=""
     fi
 
-    UPDATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    BUILD_TIMESTAMP="$(date -u +%s)"
     MANIFEST_TMP="$PUBLISH_DIR/manifest.json.tmp"
 
     {
         printf '{\n'
-        printf '  "updated_at": "%s",\n' "$UPDATED_AT"
+        printf '  "timestamp": %s,\n' "$BUILD_TIMESTAMP"
         printf '  "kclib": ['
         FIRST=1
         for DEP in $KCLIB_DEPS; do
@@ -574,10 +574,10 @@ echo "Staging embedded assets..."
 [ -d "$ASSETS_SOURCE" ] || { echo "error: assets directory not found: $ASSETS_SOURCE" >&2; exit 1; }
 rm -rf "$ASSETS_DIR"
 mkdir -p "$ASSETS_DIR/www"
-cp -r "$ASSETS_SOURCE/." "$ASSETS_DIR/www/"
 if [ -d "$COMMON_ASSETS_DIR" ]; then
     cp -r "$COMMON_ASSETS_DIR/." "$ASSETS_DIR/www/"
 fi
+cp -r "$ASSETS_SOURCE/." "$ASSETS_DIR/www/"
 
 echo "Computing embedded assets fingerprint..."
 WWW_VERSION="$( (cd "$ASSETS_DIR/www" && find . -type f | sort | while IFS= read -r F; do printf '%s|%s\n' "${F#./}" "$(sha256 "$F")"; done) | sha256sum | awk '{print $1}' )"
@@ -684,6 +684,10 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.Date;
+import java.text.SimpleDateFormat;
+import java.util.Locale;
+import java.util.TimeZone;
 
 import com.kaisarcode.kclib.KclibBridge;
 
@@ -773,23 +777,32 @@ public class Provisioner {
         String start = DEFAULT_START;
         try {
             listener.onStage("Reading app manifest...");
-            JSONObject appManifest = fetchJson(APP_MANIFEST_URL);
+            boolean[] appChanged = {false};
+            JSONObject appManifest = fetchJsonCached(context, APP_MANIFEST_URL, appChanged);
             start = appManifest.optString("start", DEFAULT_START);
 
             listener.onStage("Reading kclib manifest...");
-            JSONObject kclibManifest = fetchJson(KCLIB_MANIFEST_URL);
+            boolean[] kclibChanged = {false};
+            JSONObject kclibManifest = fetchJsonCached(context, KCLIB_MANIFEST_URL, kclibChanged);
 
-            List<Pending> pending = planWork(kclibManifest, appManifest, nativeDir, filesDir, arch);
-            long total = 0;
-            for (Pending p : pending) {
-                total += Math.max(0, p.size);
+            if (!appChanged[0] && !kclibChanged[0]) {
+                listener.onStage("Done");
+                Log.i(TAG, "provisioning up to date");
+            } else {
+                List<Pending> pending = planWork(kclibManifest, appManifest, nativeDir, filesDir, arch);
+                long total = 0;
+                for (Pending p : pending) {
+                    total += Math.max(0, p.size);
+                }
+
+                Progress progress = new Progress(listener, total);
+                syncPending(pending, progress);
+                deleteAbsent(new File(filesDir, "www"), collectExpected(appManifest));
+                writeManifestCache(context, APP_MANIFEST_URL, appManifest);
+                writeManifestCache(context, KCLIB_MANIFEST_URL, kclibManifest);
+                listener.onStage("Done");
+                Log.i(TAG, "provisioning complete");
             }
-
-            Progress progress = new Progress(listener, total);
-            syncPending(pending, progress);
-            deleteAbsent(new File(filesDir, "www"), collectExpected(appManifest));
-            listener.onStage("Done");
-            Log.i(TAG, "provisioning complete");
         } catch (IOException e) {
             Log.w(TAG, "network unavailable; using local cache", e);
             String msg = e.getMessage();
@@ -1134,6 +1147,80 @@ public class Provisioner {
         } finally {
             conn.disconnect();
         }
+    }
+
+    // Downloads a JSON manifest and caches it next to the www directory. The
+    // cached copy lets later launches skip the full re-provisioning pass when
+    // the remote manifest has not changed.
+    // @param context App context.
+    // @param url Manifest URL.
+    // @param changed_out Set to true when the remote manifest differs from the
+    //     cached copy.
+    // @return 0 on success.
+    private static JSONObject fetchJsonCached(Context context, String url, boolean[] changedOut) throws IOException {
+        File cache = new File(context.getFilesDir(), "manifest." + (url.hashCode() & 0x7fffffff) + ".json");
+        String cachedBody = readFileToString(cache);
+        long cachedTimestamp = 0;
+        if (cache.exists()) {
+            try {
+                JSONObject cached = new JSONObject(cachedBody);
+                cachedTimestamp = cached.optLong("timestamp", 0);
+            } catch (org.json.JSONException ignored) {}
+        }
+
+        // Do a HEAD request first to check if the manifest has changed
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        conn.setRequestMethod("HEAD");
+        conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+        conn.setReadTimeout(READ_TIMEOUT_MS);
+        conn.setInstanceFollowRedirects(true);
+        if (cachedTimestamp > 0) {
+            // Use If-Modified-Since with the cached timestamp
+            // Convert epoch seconds to HTTP date format
+            SimpleDateFormat httpDateFormat = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US);
+            httpDateFormat.setTimeZone(TimeZone.getTimeZone("GMT"));
+            String ims = httpDateFormat.format(new Date(cachedTimestamp * 1000L));
+            conn.setRequestProperty("If-Modified-Since", ims);
+        }
+        try {
+            int code = conn.getResponseCode();
+            if (code == HttpURLConnection.HTTP_NOT_MODIFIED) {
+                // Manifest unchanged, use cached version
+                changedOut[0] = false;
+                try {
+                    return new JSONObject(cachedBody);
+                } catch (org.json.JSONException e) {
+                    throw new IOException("invalid cached JSON", e);
+                }
+            }
+            if (code != HttpURLConnection.HTTP_OK) {
+                throw new IOException("HTTP " + code + " for " + url);
+            }
+        } finally {
+            conn.disconnect();
+        }
+
+        // Manifest changed or no cache, do a full GET
+        JSONObject fresh = fetchJson(url);
+        String body = fresh.toString();
+
+        // Extract timestamp from the fresh manifest for future caching
+        long freshTimestamp = fresh.optLong("timestamp", 0);
+
+        // Write new cache
+        writeStringToFile(new File(context.getFilesDir(), "manifest." + (url.hashCode() & 0x7fffffff) + ".json"), fresh.toString());
+        if (freshTimestamp > 0) {
+            File tsCache = new File(context.getFilesDir(), "manifest." + (url.hashCode() & 0x7fffffff) + ".ts");
+            writeStringToFile(tsCache, Long.toString(freshTimestamp));
+        }
+
+        changedOut[0] = true;
+        return fresh;
+    }
+
+    private static void writeManifestCache(Context context, String url, JSONObject manifest) throws IOException {
+        File cache = new File(context.getFilesDir(), "manifest." + (url.hashCode() & 0x7fffffff) + ".json");
+        writeStringToFile(cache, manifest.toString());
     }
 
     private static String url(String manifestUrl, String path) {

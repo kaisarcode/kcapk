@@ -1,4 +1,4 @@
 {
-  "kclib": ["grd"],
+  "kclib": ["redp2p"],
   "start": "www/index.html"
 }

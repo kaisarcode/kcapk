@@ -5,5 +5,7 @@
   "trusted_origins": ["file:///"],
   "fullscreen": true,
   "version_code": 1,
-  "version_name": "0.1.0"
+  "version_name": "0.1.0",
+  "kclib_manifest_url": "https://kaisarcode.com/kclib/dist/manifest.json",
+  "app_manifest_url": "https://kaisarcode.com/kcapk/dist/demo/manifest.json"
 }
