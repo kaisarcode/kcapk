@@ -39,7 +39,7 @@
       if (n < 1048576) return (n / 1024).toFixed(1) + ' KiB';
       return (n / 1048576).toFixed(1) + ' MiB';
     }
-    function setStage(s) { var e = document.getElementById('stage'); if (e) e.textContent = s; }
+    function setStatus(s) { var e = document.getElementById('stage'); if (e) e.textContent = s; }
     function setProgress(done, total, current, curDone, curTotal) {
       var fill = document.getElementById('fill');
       if (total > 0) {
@@ -55,8 +55,10 @@
       else parts.push('downloaded ' + fmt(done));
       var b = document.getElementById('bytes'); if (b) b.textContent = parts.join(' \u00b7 ');
     }
-    function setWarn(w) { var e = document.getElementById('warn'); if (e) { e.textContent = w; e.style.display = 'block'; } }
-    window.__stage = setStage; window.__progress = setProgress; window.__warn = setWarn;
+    function setWarning(w) { var e = document.getElementById('warn'); if (e) { e.textContent = w; e.style.display = 'block'; } }
+    window.AndroidBridge.setStatus = setStatus;
+    window.AndroidBridge.setProgress = setProgress;
+    window.AndroidBridge.setWarning = setWarning;
   </script>
 </body>
 </html>

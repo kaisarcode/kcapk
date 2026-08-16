@@ -1586,7 +1586,7 @@ $FULLSCREEN_SETUP
                             @Override
                             public void run() {
                                 webView.evaluateJavascript(
-                                        "if(window.__stage)window.__stage(\"" + escapeJs(text) + "\");", null);
+                                         "if(window.AndroidBridge && window.AndroidBridge.setStatus)window.AndroidBridge.setStatus(\"" + escapeJs(text) + "\");", null);
                             }
                         });
                     }
@@ -1598,7 +1598,7 @@ $FULLSCREEN_SETUP
                             @Override
                             public void run() {
                                 webView.evaluateJavascript(
-                                        "if(window.__progress)window.__progress(" + bytesDone + "," + bytesTotal
+                                        "if(window.AndroidBridge && window.AndroidBridge.setProgress)window.AndroidBridge.setProgress(" + bytesDone + "," + bytesTotal
                                                 + ",\"" + escapeJs(current) + "\"," + currentDone + ","
                                                 + currentTotal + ");", null);
                             }
@@ -1611,7 +1611,7 @@ $FULLSCREEN_SETUP
                             @Override
                             public void run() {
                                 webView.evaluateJavascript(
-                                        "if(window.__warn)window.__warn(\"" + escapeJs(text) + "\");", null);
+                                        "if(window.AndroidBridge && window.AndroidBridge.setWarning)window.AndroidBridge.setWarning(\"" + escapeJs(text) + "\");", null);
                             }
                         });
                     }
