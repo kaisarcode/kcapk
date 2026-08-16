@@ -1,0 +1,9 @@
+{
+  "display_name": "Demo",
+  "package_name": "com.kaisarcode.demo",
+  "icon": "app.png",
+  "trusted_origins": ["file:///"],
+  "fullscreen": true,
+  "version_code": 1,
+  "version_name": "0.1.0"
+}

@@ -1,0 +1,4 @@
+{
+  "kclib": ["grd"],
+  "start": "www/index.html"
+}

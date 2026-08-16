@@ -1,0 +1,62 @@
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      margin: 0;
+      background: #101418;
+      color: #dde3ea;
+      font-family: system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      padding: 0 1.5rem;
+      text-align: center;
+    }
+    h2 { margin: 0 0 0.5rem; font-size: 1.1rem; font-weight: 600; }
+    #stage { margin: 0 0 1rem; color: #8b949e; font-size: 0.9rem; }
+    .progress-bar {
+      width: 100%; max-width: 24rem; height: 0.5rem;
+      background: #232b36; border-radius: 4px; overflow: hidden;
+    }
+    #fill { height: 100%; width: 0%; background: #238636; }
+    #bytes { margin: 0.75rem 0 0; color: #8b949e; font-size: 0.8rem; }
+    #warn { margin: 1rem 0 0; color: #f0883e; font-size: 0.85rem; display: none; }
+  </style>
+</head>
+<body>
+  <h2>Loading</h2>
+  <p id="stage">Starting...</p>
+  <div class="progress-bar"><div id="fill"></div></div>
+  <p id="bytes"></p>
+  <p id="warn"></p>
+  <script>
+    function fmt(n) {
+      n = Math.max(0, n);
+      if (n < 1024) return n + ' B';
+      if (n < 1048576) return (n / 1024).toFixed(1) + ' KiB';
+      return (n / 1048576).toFixed(1) + ' MiB';
+    }
+    function setStage(s) { var e = document.getElementById('stage'); if (e) e.textContent = s; }
+    function setProgress(done, total, current, curDone, curTotal) {
+      var fill = document.getElementById('fill');
+      if (total > 0) {
+        var pct = Math.min(100, Math.floor(100 * done / total));
+        if (fill) fill.style.width = pct + '%';
+      }
+      var parts = [];
+      if (current && current !== '') {
+        if (curTotal > 0) parts.push(current + ' ' + fmt(curDone) + ' / ' + fmt(curTotal));
+        else parts.push(current + ' ' + fmt(curDone));
+      }
+      if (total > 0) parts.push('total ' + fmt(done) + ' / ' + fmt(total) + ' (' + Math.min(100, Math.floor(100 * done / total)) + '%)');
+      else parts.push('downloaded ' + fmt(done));
+      var b = document.getElementById('bytes'); if (b) b.textContent = parts.join(' \u00b7 ');
+    }
+    function setWarn(w) { var e = document.getElementById('warn'); if (e) { e.textContent = w; e.style.display = 'block'; } }
+    window.__stage = setStage; window.__progress = setProgress; window.__warn = setWarn;
+  </script>
+</body>
+</html>
