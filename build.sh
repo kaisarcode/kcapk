@@ -1374,11 +1374,16 @@ public class JSBridge {
     private final Context context;
     private final WebView webView;
     private final String[] trustedOrigins;
+    private volatile String currentUrl = "file:///android_asset/";
 
     public JSBridge(Context context, WebView webView, String[] trustedOrigins) {
         this.context = context;
         this.webView = webView;
         this.trustedOrigins = trustedOrigins;
+    }
+
+    public void setCurrentUrl(String url) {
+        this.currentUrl = url;
     }
 
     public static boolean isTrustedUrl(String url, String[] trustedOrigins) {
@@ -1441,7 +1446,18 @@ public class JSBridge {
     }
 
     private boolean canUseBridge() {
-        return isTrustedUrl(webView.getUrl(), trustedOrigins);
+        String url = currentUrl;
+        if (url == null) {
+            return false;
+        }
+        if (url.startsWith("file://")) {
+            return true;
+        }
+        try {
+            return isTrustedUrl(url, trustedOrigins);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     @JavascriptInterface
@@ -1518,6 +1534,7 @@ public class MainActivity extends Activity {
     private static final String[] TRUSTED_ORIGINS = { $JAVA_TRUSTED_ORIGINS };
 
     private WebView webView;
+    private JSBridge jsBridge;
     private String homeUrl = null;
 
     @Override
@@ -1538,17 +1555,19 @@ $FULLSCREEN_SETUP
         webView.getSettings().setUseWideViewPort(true);
         webView.getSettings().setLoadWithOverviewMode(true);
         webView.setVerticalScrollBarEnabled(false);
+        jsBridge = new JSBridge(this, webView, TRUSTED_ORIGINS);
         webView.setWebViewClient(new TrustedWebViewClient(this, TRUSTED_ORIGINS) {
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
+                jsBridge.setCurrentUrl(url);
                 if (homeUrl != null && homeUrl.equals(url)) {
                     view.clearHistory();
                     homeUrl = null;
                 }
             }
         });
-        webView.addJavascriptInterface(new JSBridge(this, webView, TRUSTED_ORIGINS), JS_INTERFACE_NAME);
+        webView.addJavascriptInterface(jsBridge, JS_INTERFACE_NAME);
 
         webView.loadDataWithBaseURL("file:///android_asset/", loadSplashPage(), "text/html", "UTF-8", null);
 
