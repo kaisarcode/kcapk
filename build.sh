@@ -9,6 +9,8 @@
 # Website: https://kaisarcode.com
 # License: https://www.gnu.org/licenses/gpl-3.0.html
 
+# Prints the usage message to stdout.
+# @return 0 on success.
 usage () {
     cat <<'EOF'
 Usage:
@@ -19,7 +21,7 @@ Options:
   -c, --clean     Clean temp files and debug keystore first
 
 Output:
-  PROJECT_NAME/app/bin/PROJECT_NAME.{apk,aab}
+  projects/PROJECT_NAME/app/bin/PROJECT_NAME.{apk,aab}
   ../dist/PROJECT_NAME/manifest.json + www/ + .apk
 EOF
 }
@@ -28,6 +30,7 @@ EOF
 # (string value, scalar value, or one array element per line).
 # @param file JSON file (flat).
 # @param key  Key name (without quotes).
+# @return 0 on success; the value is written to stdout.
 json_get () {
     json_file="$1"
     json_key="$2"
@@ -121,11 +124,14 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$PROJECT_NAME" ] || { usage >&2; exit 1; }
-APP_DIR="./$PROJECT_NAME"
+APP_DIR="./projects/$PROJECT_NAME"
 CONFIG_FILE="$APP_DIR/config.json"
 
 [ -f "$CONFIG_FILE" ] || { echo "error: config not found: $CONFIG_FILE" >&2; exit 1; }
 
+# Reads a config value for the current project.
+# @param key Key name (without quotes).
+# @return 0 on success; the value is written to stdout.
 cfg () {
     json_get "$CONFIG_FILE" "$1"
 }
@@ -189,6 +195,7 @@ LAYOUT_DIR="$RES_DIR/layout"
 VALUES_DIR="$RES_DIR/values"
 ASSETS_DIR="$BASE_DIR/assets"
 ASSETS_SOURCE="$APP_DIR/assets"
+COMMON_ASSETS_DIR="assets"
 PUBLISH_DIR="../dist/$PROJECT_NAME"
 
 MIPMAP_MDPI_DIR="$RES_DIR/mipmap-mdpi"
@@ -239,7 +246,6 @@ JS_INTERFACE_FILE="$SRC_DIR/JSBridge.java"
 WEBVIEW_CLIENT_FILE="$SRC_DIR/TrustedWebViewClient.java"
 PROVISIONER_FILE="$SRC_DIR/Provisioner.java"
 KCLIB_BRIDGE_PACKAGE="com.kaisarcode.kclib"
-KCLIB_BRIDGE_SUBPATH="com/kaisarcode/kclib"
 KCLIB_BRIDGE_DIR="$BASE_DIR/src/main/java/com/kaisarcode/kclib"
 KCLIB_BRIDGE_FILE="$KCLIB_BRIDGE_DIR/KclibBridge.java"
 
@@ -441,6 +447,9 @@ publish () {
     mkdir -p "$PUBLISH_DIR/www"
 
     cp -r "$ASSETS_SOURCE/." "$PUBLISH_DIR/www/"
+    if [ -d "$COMMON_ASSETS_DIR" ]; then
+        cp -r "$COMMON_ASSETS_DIR/." "$PUBLISH_DIR/www/"
+    fi
 
     APK_PUBLISHED="$PUBLISH_DIR/$PROJECT_NAME.apk"
     if [ -f "$DEBUG_APK_FILE" ]; then
@@ -476,10 +485,10 @@ publish () {
         fi
         printf '  "assets": [\n'
         FIRST=1
-        (cd "$ASSETS_SOURCE" && find . -type f | sort) | while IFS= read -r REL; do
+        (cd "$PUBLISH_DIR/www" && find . -type f | sort) | while IFS= read -r REL; do
             REL="${REL#./}"
-            SIZE="$(wc -c < "$ASSETS_SOURCE/$REL" | tr -d '[:space:]')"
-            SHA="$(sha256 "$ASSETS_SOURCE/$REL")"
+            SIZE="$(wc -c < "$PUBLISH_DIR/www/$REL" | tr -d '[:space:]')"
+            SHA="$(sha256 "$PUBLISH_DIR/www/$REL")"
             if [ "$FIRST" -eq 0 ]; then
                 printf ',\n'
             fi
@@ -566,9 +575,12 @@ echo "Staging embedded assets..."
 rm -rf "$ASSETS_DIR"
 mkdir -p "$ASSETS_DIR/www"
 cp -r "$ASSETS_SOURCE/." "$ASSETS_DIR/www/"
+if [ -d "$COMMON_ASSETS_DIR" ]; then
+    cp -r "$COMMON_ASSETS_DIR/." "$ASSETS_DIR/www/"
+fi
 
 echo "Computing embedded assets fingerprint..."
-WWW_VERSION="$( (cd "$ASSETS_SOURCE" && find . -type f | sort | while IFS= read -r F; do printf '%s|%s\n' "${F#./}" "$(sha256 "$F")"; done) | sha256sum | awk '{print $1}' )"
+WWW_VERSION="$( (cd "$ASSETS_DIR/www" && find . -type f | sort | while IFS= read -r F; do printf '%s|%s\n' "${F#./}" "$(sha256 "$F")"; done) | sha256sum | awk '{print $1}' )"
 printf '%s\n' "$WWW_VERSION" > "$ASSETS_DIR/www.version"
 echo "www fingerprint: $WWW_VERSION"
 
@@ -974,6 +986,11 @@ public class Provisioner {
 
     // Deletes local files under filesDir/www that are not listed in the manifest.
     private static void deleteAbsent(File dir, Set<String> expected) {
+        String prefix = dir.getParentFile().getAbsolutePath() + File.separator;
+        deleteAbsent(dir, expected, prefix);
+    }
+
+    private static void deleteAbsent(File dir, Set<String> expected, String prefix) {
         if (!dir.isDirectory()) {
             return;
         }
@@ -981,10 +998,9 @@ public class Provisioner {
         if (children == null) {
             return;
         }
-        String prefix = dir.getParentFile().getAbsolutePath() + File.separator;
         for (File child : children) {
             if (child.isDirectory()) {
-                deleteAbsent(child, expected);
+                deleteAbsent(child, expected, prefix);
                 if (child.list().length == 0) {
                     child.delete();
                 }
@@ -1569,7 +1585,7 @@ $FULLSCREEN_SETUP
         });
         webView.addJavascriptInterface(jsBridge, JS_INTERFACE_NAME);
 
-        webView.loadDataWithBaseURL("file:///android_asset/", loadSplashPage(), "text/html", "UTF-8", null);
+        webView.loadDataWithBaseURL(splashBaseUrl(), loadSplashPage(), "text/html", "UTF-8", null);
 
         final Handler handler = new Handler(Looper.getMainLooper());
         final Activity activity = this;
@@ -1639,6 +1655,13 @@ $FULLSCREEN_SETUP
                 });
             }
         }).start();
+    }
+
+    private String splashBaseUrl() {
+        if (new File(getFilesDir(), "www/splash.html").isFile()) {
+            return "file://" + getFilesDir() + "/www/";
+        }
+        return "file:///android_asset/www/";
     }
 
     private String loadSplashPage() {
