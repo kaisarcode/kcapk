@@ -816,7 +816,7 @@ public class Provisioner {
         // File.toURI() returns file:/path (single slash), fix to file:///path (triple slash)
         String uri = new File(filesDir, start).toURI().toString();
         if (uri.startsWith("file:/") && !uri.startsWith("file:///")) {
-            uri = "file://" + uri.substring(6);
+            uri = "file:///" + uri.substring(6);
         }
         return uri;
     }
@@ -1697,10 +1697,22 @@ $FULLSCREEN_SETUP
 
         webView.getSettings().setJavaScriptEnabled(true);
         webView.getSettings().setAllowFileAccess(true);
+        webView.getSettings().setAllowFileAccessFromFileURLs(true);
+        webView.getSettings().setAllowUniversalAccessFromFileURLs(true);
         webView.getSettings().setDomStorageEnabled(true);
         webView.getSettings().setUseWideViewPort(true);
         webView.getSettings().setLoadWithOverviewMode(true);
         webView.setVerticalScrollBarEnabled(false);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
+            WebView.setWebContentsDebuggingEnabled(true);
+        }
+        webView.setWebChromeClient(new android.webkit.WebChromeClient() {
+            @Override
+            public boolean onConsoleMessage(android.webkit.ConsoleMessage consoleMessage) {
+                android.util.Log.d("JSConsole", consoleMessage.message() + " (" + consoleMessage.sourceId() + ":" + consoleMessage.lineNumber() + ")");
+                return super.onConsoleMessage(consoleMessage);
+            }
+        });
         jsBridge = new JSBridge(this, webView, TRUSTED_ORIGINS);
         webView.setWebViewClient(new TrustedWebViewClient(this, TRUSTED_ORIGINS) {
             @Override
@@ -1770,14 +1782,11 @@ $FULLSCREEN_SETUP
                     Log.e(TAG, "provision failed", e);
                 }
 
-                Log.d(TAG, "Provisioning thread done, posting to handler");
                 handler.post(new Runnable() {
                     @Override
                     public void run() {
-                        Log.d(TAG, "Handler callback executing, result[0]=" + result[0] + " result[1]=" + result[1]);
                         if (result[0] != null) {
                             homeUrl = result[0];
-                            Log.d(TAG, "Loading home URL: " + result[0]);
                             webView.loadUrl(result[0]);
                         } else {
                             Log.e(TAG, "Provisioning failed: " + result[1]);

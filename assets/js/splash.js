@@ -107,6 +107,8 @@
         pendingWarning = deliver(warningFn, w);
     };
 
+    window.KcSplash = {};
+
     /**
      * Registers the render callback for status text.
      * @param fn Function receiving the status string.
