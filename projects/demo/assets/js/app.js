@@ -15,6 +15,10 @@
     var status = document.getElementById('status');
     var currentHandle = null;
     var INDEX_PORT = 9001;
+    var REMOTE_HOST = '190.105.227.97';
+    var REMOTE_PORT = 9001;
+    var PUB_ID = 'kcapk';
+    var CON_LISTEN_TCP = 40001;
 
     /**
      * Sets the status text in the header.
@@ -149,6 +153,60 @@
     }
 
     /**
+     * Starts a publisher on the remote index with a custom key directory.
+     * @param id Publisher identifier.
+     * @param host Index host.
+     * @param port Index port.
+     * @return Runner handle, or null on failure.
+     */
+    function startPub(id, host, port) {
+        var addr = id + '@' + host + ':' + port;
+        var keysDir = '';
+        try {
+            keysDir = AndroidBridge.getFilesDir();
+        } catch (e) {
+            log('getFilesDir failed: ' + e);
+        }
+        log('Auto-test: publish ' + addr + ' keys_dir=' + keysDir + '...');
+        var args = {
+            op: 'pub',
+            addr: addr,
+            pass: '1234',
+            tcp: 40002,
+            sweep: 0
+        };
+        if (keysDir) args.keys_dir = keysDir;
+        var result = runCommand('open', args);
+        if (!result || !result.handle) {
+            log('publish failed');
+            return null;
+        }
+        log('Published, handle: ' + result.handle);
+        return result.handle;
+    }
+
+    /**
+     * Connects a consumer to a publisher on the remote index.
+     * @return Runner handle, or null on failure.
+     */
+    function startCon() {
+        var addr = PUB_ID + '@' + REMOTE_HOST + ':' + REMOTE_PORT;
+        log('Auto-test: connect to ' + addr + ' tcp ' + CON_LISTEN_TCP + '...');
+        var result = runCommand('open', {
+            op: 'con',
+            addr: addr,
+            tcp: CON_LISTEN_TCP,
+            sweep: 0
+        });
+        if (!result || !result.handle) {
+            log('connect failed');
+            return null;
+        }
+        log('Connected, handle: ' + result.handle);
+        return result.handle;
+    }
+
+    /**
      * Runs the full index lifecycle test.
      * @return 0 on success.
      */
@@ -161,8 +219,27 @@
             listPublishers('127.0.0.1', INDEX_PORT);
             stopOperation(handle);
             closeHandle(handle);
-            setStatus('All tests done');
+            listPublishers(REMOTE_HOST, REMOTE_PORT);
         }, 1500);
+
+        setTimeout(function () {
+            var pub = startPub(PUB_ID, REMOTE_HOST, REMOTE_PORT);
+            if (pub === null) return 1;
+            setTimeout(function () {
+                readStatus(pub);
+                listPublishers(REMOTE_HOST, REMOTE_PORT);
+            }, 3000);
+        }, 3500);
+
+        setTimeout(function () {
+            var con = startCon();
+            if (con === null) return 1;
+            setTimeout(function () {
+                readStatus(con);
+                listPublishers(REMOTE_HOST, REMOTE_PORT);
+                setStatus('Tunnel ready, send data via adb forward 40001');
+            }, 3000);
+        }, 7000);
         return 0;
     }
 

@@ -1636,6 +1636,14 @@ public class JSBridge {
     // {"lib":"grd","cmd":"split","args":{"w":1920},"handle":0}. Returns the
     // result JSON, or "error: <detail>" on failure.
     @JavascriptInterface
+    public String getFilesDir() {
+        if (!canUseBridge()) {
+            return "";
+        }
+        return context.getFilesDir().getAbsolutePath();
+    }
+
+    @JavascriptInterface
     public String runKclib(String payloadJson, String stdin) {
         if (!canUseBridge()) {
             return "error: untrusted origin";
