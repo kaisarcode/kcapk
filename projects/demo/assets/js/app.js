@@ -12,32 +12,34 @@
     console.log('app.js loaded');
 
     var output = document.getElementById('output');
-    var status = document.getElementById('status');
     var currentHandle = null;
     var INDEX_PORT = 9001;
     var REMOTE_HOST = '190.105.227.97';
     var REMOTE_PORT = 9001;
     var PUB_ID = 'kcapk';
     var CON_LISTEN_TCP = 40001;
+    var results = [];
 
-    /**
-     * Sets the status text in the header.
-     * @param text Status text.
-     * @return 0 on success.
-     */
-    function setStatus(text) {
-        if (status) status.textContent = text;
-        console.log('STATUS: ' + text);
-    }
-
-    /**
-     * Logs a message to the output area.
-     * @param text Message text.
-     * @return 0 on success.
-     */
     function log(text) {
         if (output) output.textContent += text + '\n';
         console.log('LOG: ' + text);
+    }
+
+    function recordResult(name, ok, detail) {
+        results.push({name: name, ok: ok, detail: detail || ''});
+        log((ok ? 'PASS' : 'FAIL') + ' ' + name + (detail ? ' - ' + detail : ''));
+    }
+
+    function printSummary() {
+        var passed = 0, failed = 0;
+        for (var i = 0; i < results.length; i++) {
+            if (results[i].ok) passed++; else failed++;
+        }
+        log('');
+        log('=== SUMMARY ===');
+        log('Passed: ' + passed + ' / ' + results.length);
+        if (failed > 0) log('Failed: ' + failed);
+        log('===============');
     }
 
     /**
@@ -69,11 +71,11 @@
         return runCommand('open', {op: 'idx', port: port})
             .then(function (result) {
                 if (!result || !result.handle) {
-                    log('start index failed');
+                    recordResult('start index', false, 'no handle');
                     return null;
                 }
                 currentHandle = result.handle;
-                log('Index started, handle: ' + result.handle);
+                recordResult('start index', true, 'handle: ' + result.handle);
                 return result.handle;
             });
     }
@@ -89,14 +91,11 @@
         return runCommand('list', {host: host, port: port})
             .then(function (result) {
                 if (!result || !result.result) {
-                    log('list failed');
+                    recordResult('list ' + host + ':' + port, false, 'no result');
                     return null;
                 }
-                if (result.result.publishers) {
-                    log('Publishers: ' + result.result.publishers.length);
-                } else {
-                    log('List result: ' + JSON.stringify(result.result));
-                }
+                var count = result.result.publishers ? result.result.publishers.length : 0;
+                recordResult('list ' + host + ':' + port, true, count + ' publishers');
                 return result;
             });
     }
@@ -110,10 +109,10 @@
         return runCommand('status', {handle: handle})
             .then(function (result) {
                 if (!result || !result.result) {
-                    log('status failed');
+                    recordResult('status handle ' + handle, false, 'no result');
                     return null;
                 }
-                log('Status: ' + JSON.stringify(result.result));
+                recordResult('status handle ' + handle, true, JSON.stringify(result.result));
                 return result.result;
             });
     }
@@ -127,12 +126,8 @@
         log('Auto-test: stop handle ' + handle + '...');
         return runCommand('stop', {handle: handle})
             .then(function (result) {
-                if (!result) {
-                    log('stop failed');
-                    return 1;
-                }
-                log('Stop result: ' + JSON.stringify(result.result));
-                return 0;
+                recordResult('stop handle ' + handle, !!result, result ? JSON.stringify(result.result) : 'no result');
+                return result ? 0 : 1;
             });
     }
 
@@ -145,13 +140,9 @@
         log('Auto-test: close handle ' + handle + '...');
         return runCommand('close', {handle: handle})
             .then(function (result) {
-                if (!result) {
-                    log('close failed');
-                    return 1;
-                }
-                log('Close result: ' + JSON.stringify(result.result));
+                recordResult('close handle ' + handle, !!result, result ? JSON.stringify(result.result) : 'no result');
                 currentHandle = null;
-                return 0;
+                return result ? 0 : 1;
             });
     }
 
@@ -182,10 +173,10 @@
         return runCommand('open', args)
             .then(function (result) {
                 if (!result || !result.handle) {
-                    log('publish failed');
+                    recordResult('publish', false, 'no handle');
                     return null;
                 }
-                log('Published, handle: ' + result.handle);
+                recordResult('publish', true, 'handle: ' + result.handle);
                 return result.handle;
             });
     }
@@ -205,18 +196,14 @@
         })
             .then(function (result) {
                 if (!result || !result.handle) {
-                    log('connect failed');
+                    recordResult('connect', false, 'no handle');
                     return null;
                 }
-                log('Connected, handle: ' + result.handle);
+                recordResult('connect', true, 'handle: ' + result.handle);
                 return result.handle;
             });
     }
 
-    /**
-     * Runs the full index lifecycle test.
-     * @return 0 on success.
-     */
     function runIndexTest() {
         startIndex(INDEX_PORT)
             .then(function (handle) {
@@ -248,7 +235,9 @@
                     setTimeout(function () {
                         readStatus(con);
                         listPublishers(REMOTE_HOST, REMOTE_PORT);
-                        setStatus('Tunnel ready, send data via adb forward 40001');
+                        setTimeout(function () {
+                            printSummary();
+                        }, 500);
                     }, 3000);
                 });
         }, 7000);

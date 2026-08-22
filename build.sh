@@ -823,6 +823,16 @@ public class Provisioner {
                 writeManifestCache(context, KCLIB_MANIFEST_URL, kclibManifest);
                 listener.onStage("Done");
                 Log.i(TAG, "provisioning complete");
+
+                JSONArray kclibDeps = appManifest.optJSONArray("kclib");
+                if (kclibDeps != null && kclibDeps.length() > 0) {
+                    StringBuilder wl = new StringBuilder();
+                    for (int i = 0; i < kclibDeps.length(); i++) {
+                        if (i > 0) wl.append(",");
+                        wl.append(kclibDeps.optString(i));
+                    }
+                    setKclibWhitelist(wl.toString());
+                }
             }
         } catch (IOException e) {
             Log.w(TAG, "network unavailable; using local cache", e);
@@ -848,15 +858,33 @@ public class Provisioner {
         }
         File lib = new File(context.getCodeCacheDir(), "libjni.so");
         if (!lib.isFile()) {
+            for (int i = 0; i < 20; i++) {
+                try { Thread.sleep(250); } catch (InterruptedException ignored) {}
+                if (lib.isFile()) break;
+            }
+        }
+        if (!lib.isFile()) {
             nativeLoadError = "libjni.so not provisioned";
             return false;
         }
-        if (!KclibBridge.ensureLoaded(lib.getAbsolutePath())) {
-            nativeLoadError = "load libjni.so failed";
+        try {
+            System.load(lib.getAbsolutePath());
+            nativeLoaded = true;
+            nativeLoadError = null;
+            return true;
+        } catch (Throwable t) {
+            nativeLoadError = "load libjni.so: " + String.valueOf(t.getMessage());
             return false;
         }
-        nativeLoaded = true;
-        return true;
+    }
+
+    public static void setKclibWhitelist(String whitelist) {
+        if (nativeLoaded) {
+            try {
+                KclibBridge.setWhitelist(whitelist);
+            } catch (Throwable ignored) {
+            }
+        }
     }
 
     public static String nativeLoadError() {
@@ -898,10 +926,15 @@ public class Provisioner {
         if (deps != null && deps.length() > 0) {
             nativeDir.mkdirs();
 
+            boolean embeddedNewer = serverManifestTimestamp > 0 && embeddedBuildTimestamp > 0
+                    && serverManifestTimestamp < embeddedBuildTimestamp;
+
             JSONObject jniRec = findKclibRecord(kclibManifest, "jni.c", "libjni.so", "android", arch);
             String jniSha = jniRec.optString("sha256");
             File jniTarget = new File(nativeDir, "libjni.so");
-            if (!isUpToDate(jniTarget, jniSha)) {
+            if (embeddedNewer && jniTarget.isFile()) {
+                Log.i(TAG, "libjni.so: up to date (embedded newer)");
+            } else if (!isUpToDate(jniTarget, jniSha)) {
                 Log.i(TAG, "libjni.so: installing");
                 pending.add(new Pending(
                         "libjni.so (" + arch + ")",
@@ -922,6 +955,10 @@ public class Provisioner {
                 JSONObject rec = findKclibRecord(kclibManifest, dep + ".c", libName, "android", arch);
                 String sha = rec.optString("sha256");
                 File target = new File(nativeDir, libName);
+                if (embeddedNewer && target.isFile()) {
+                    Log.i(TAG, dep + ": up to date (embedded newer)");
+                    continue;
+                }
                 if (isUpToDate(target, sha)) {
                     Log.i(TAG, dep + ": up to date");
                     continue;
@@ -1504,6 +1541,7 @@ public final class KclibBridge {
     }
 
     public static native String run(String payloadJson);
+    public static native void setWhitelist(String whitelist);
 }
 EOF
 
@@ -1551,6 +1589,13 @@ public class NativeBridge {
                 rawPayload = p.toString();
             }
         } catch (Exception ignored) {
+        }
+
+        for (int retry = 0; retry < 5; retry++) {
+            if (Provisioner.ensureNative(context)) {
+                break;
+            }
+            try { Thread.sleep(500); } catch (InterruptedException ignored) {}
         }
 
         if (!Provisioner.ensureNative(context)) {
