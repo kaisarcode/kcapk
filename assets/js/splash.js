@@ -1,6 +1,6 @@
 /**
  * KcSplash - common kcapk splash library.
- * Summary: Bridges provisioning progress from AndroidBridge into render callbacks registered by the per-project splash page.
+ * Summary: Bridges provisioning progress from NativeBridge into render callbacks registered by the per-project splash page.
  * Author:  KaisarCode
  * Website: https://kaisarcode.com
  * License: GNU General Public License v3.0
@@ -83,7 +83,7 @@
      * Receives provisioning status text from the native bridge.
      * @param s Status text.
      */
-    window.AndroidBridge.setStatus = function (s) {
+    window.NativeBridge.setStatus = function (s) {
         pendingStatus = deliver(statusFn, s);
     };
 
@@ -95,7 +95,7 @@
      * @param curDone Current file bytes done.
      * @param curTotal Current file bytes total.
      */
-    window.AndroidBridge.setProgress = function (done, total, current, curDone, curTotal) {
+    window.NativeBridge.setProgress = function (done, total, current, curDone, curTotal) {
         pendingProgress = deliver(progressFn, computeProgress(done, total, current, curDone, curTotal));
     };
 
@@ -103,7 +103,7 @@
      * Receives provisioning warning text from the native bridge.
      * @param w Warning text.
      */
-    window.AndroidBridge.setWarning = function (w) {
+    window.NativeBridge.setWarning = function (w) {
         pendingWarning = deliver(warningFn, w);
     };
 

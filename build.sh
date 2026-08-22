@@ -611,6 +611,22 @@ cat << EOF > "$MANIFEST_FILE"
         android:resizeableActivity="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <meta-data android:name="android.max_aspect" android:value="2.4" />
+EOF
+
+if [ -n "$KCLIB_DEPS" ]; then
+    KCLIB_WHITELIST=""
+    for DEP in $KCLIB_DEPS; do
+        if [ -n "$KCLIB_WHITELIST" ]; then
+            KCLIB_WHITELIST="$KCLIB_WHITELIST,"
+        fi
+        KCLIB_WHITELIST="$KCLIB_WHITELIST$DEP"
+    done
+    cat << EOF >> "$MANIFEST_FILE"
+        <meta-data android:name="com.kaisarcode.kclib.allowed_kclibs" android:value="$KCLIB_WHITELIST" />
+EOF
+fi
+
+cat << EOF >> "$MANIFEST_FILE"
         <activity
             android:name="$PACKAGE_NAME.MainActivity"
             android:exported="true"
@@ -833,12 +849,15 @@ public class Provisioner {
             nativeLoadError = "libjni.so not provisioned";
             return false;
         }
-        if (!KclibBridge.ensureLoaded(lib.getAbsolutePath())) {
-            nativeLoadError = KclibBridge.loadError();
+        try {
+            Class.forName("com.kaisarcode.kclib.KclibBridge");
+            nativeLoaded = true;
+            nativeLoadError = null;
+            return true;
+        } catch (Throwable t) {
+            nativeLoadError = "load KclibBridge: " + String.valueOf(t.getMessage());
             return false;
         }
-        nativeLoaded = true;
-        return true;
     }
 
     public static String nativeLoadError() {
@@ -1460,44 +1479,22 @@ EOF
 cat << EOF > "$KCLIB_BRIDGE_FILE"
 package $KCLIB_BRIDGE_PACKAGE;
 
-import java.io.File;
-
-// Static facade for the libjni native bridge. libjni.so is provisioned at
-// runtime (see Provisioner) and loaded on first use; it registers the native
-// "run" method below, which dlopens the provisioned lib<name>.so and calls
-// kc_<name>_run with the runner payload.
+// JNI facade for the libjni native bridge. libjni.so is loaded via
+// System.loadLibrary at class init time; it reads the kclib whitelist from
+// AndroidManifest.xml metadata and registers the native "run" method.
 public final class KclibBridge {
-    private static boolean loaded = false;
-    private static String loadError = null;
-
-    private KclibBridge() {
-    }
-
-    public static synchronized boolean ensureLoaded(String libPath) {
-        if (loaded) {
-            return true;
-        }
-        File lib = new File(libPath);
-        if (!lib.isFile()) {
-            loadError = "libjni.so not provisioned";
-            return false;
-        }
+    static {
         try {
-            System.load(lib.getAbsolutePath());
-            loaded = true;
-            loadError = null;
-            return true;
+            System.loadLibrary("jni");
         } catch (Throwable t) {
-            loadError = "load libjni.so: " + String.valueOf(t.getMessage());
-            return false;
+            android.util.Log.e("KclibBridge", "loadLibrary jni: " + t.getMessage());
         }
     }
 
-    public static String loadError() {
-        return loadError != null ? loadError : "unknown";
+    public KclibBridge() {
     }
 
-    public static native String run(String argsJson, String stdinJson);
+    public static native String run(String payloadJson);
 }
 EOF
 
@@ -1512,8 +1509,6 @@ import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 
 import java.net.URI;
-
-import com.kaisarcode.kclib.KclibBridge;
 
 public class JSBridge {
     private static final String LOCAL_ASSET_PREFIX = "file:///android_asset/";
@@ -1591,7 +1586,7 @@ public class JSBridge {
         return scheme + "://" + host + ":" + port;
     }
 
-    private boolean canUseBridge() {
+    boolean canUseBridge() {
         String url = currentUrl;
         if (url == null) {
             return false;
@@ -1629,36 +1624,12 @@ public class JSBridge {
         return false;
     }
 
-    // Runs a provisioned kclib command in-process through the JNI bridge. No
-    // subprocess is spawned: libjni.so is loaded on first use and dispatches
-    // the payload to lib<name>.so's kc_<name>_run entry point.
-    // payloadJson is the runner payload, e.g.
-    // {"lib":"grd","cmd":"split","args":{"w":1920},"handle":0}. Returns the
-    // result JSON, or "error: <detail>" on failure.
     @JavascriptInterface
     public String getFilesDir() {
         if (!canUseBridge()) {
             return "";
         }
         return context.getFilesDir().getAbsolutePath();
-    }
-
-    @JavascriptInterface
-    public String runKclib(String payloadJson, String stdin) {
-        if (!canUseBridge()) {
-            return "error: untrusted origin";
-        }
-        if (payloadJson == null || payloadJson.isEmpty()) {
-            return "error: missing payload";
-        }
-        if (!Provisioner.ensureNative(context)) {
-            return "error: " + Provisioner.nativeLoadError();
-        }
-        try {
-            return KclibBridge.run(payloadJson, stdin);
-        } catch (Throwable t) {
-            return "error: " + String.valueOf(t.getMessage());
-        }
     }
 }
 EOF
@@ -1682,10 +1653,29 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 $FULLSCREEN_IMPORTS
 
+import com.kaisarcode.kclib.KclibBridge;
+
 public class MainActivity extends Activity {
     private static final String TAG = "MainActivity";
     private static final String JS_INTERFACE_NAME = "AndroidBridge";
     private static final String[] TRUSTED_ORIGINS = { $JAVA_TRUSTED_ORIGINS };
+
+    private static final String NATIVE_BRIDGE_SCRIPT =
+        "(function(){if(window.NativeBridge){return;}"
+        + "var __kcPending={};var __kcSeq=0;"
+        + "function __kcReceive(msg){if(msg&&typeof msg.id==='" + "'" + "string'){"
+        + "var p=__kcPending[msg.id];if(p){delete __kcPending[msg.id];"
+        + "if(msg.ok){p.resolve(msg.result!==undefined?msg.result:{ok:true});}"
+        + "else{p.reject(msg.error||{code:'INTERNAL_ERROR',message:'Bridge error'});}}return;}}"
+        + "window.__kcReceive=__kcReceive;"
+        + "window.NativeBridge={};function __kcSend(method,params){"
+        + "return new Promise(function(resolve,reject){"
+        + "var id=String(++__kcSeq);__kcPending[id]={resolve:resolve,reject:reject};"
+        + "KclibBridge.run(JSON.stringify({id:id,method:method,params:params===undefined?null:params}));});}"
+        + "window.NativeBridge.invoke=function(method,params){return __kcSend(method,params);};"
+        + "window.NativeBridge.setStatus=function(s){};"
+        + "window.NativeBridge.setProgress=function(d,t,c,cd,ct){};"
+        + "window.NativeBridge.setWarning=function(w){};}());";
 
     private WebView webView;
     private JSBridge jsBridge;
@@ -1727,6 +1717,7 @@ $FULLSCREEN_SETUP
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 jsBridge.setCurrentUrl(url);
+                view.evaluateJavascript(NATIVE_BRIDGE_SCRIPT, null);
                 if (homeUrl != null && homeUrl.equals(url)) {
                     view.clearHistory();
                     homeUrl = null;
@@ -1734,6 +1725,7 @@ $FULLSCREEN_SETUP
             }
         });
         webView.addJavascriptInterface(jsBridge, JS_INTERFACE_NAME);
+        webView.addJavascriptInterface(new KclibBridge(), "KclibBridge");
 
         webView.loadDataWithBaseURL(splashBaseUrl(), loadSplashPage(), "text/html", "UTF-8", null);
 
@@ -1752,7 +1744,7 @@ $FULLSCREEN_SETUP
                             @Override
                             public void run() {
                                 webView.evaluateJavascript(
-                                         "if(window.AndroidBridge && window.AndroidBridge.setStatus)window.AndroidBridge.setStatus(\"" + escapeJs(text) + "\");", null);
+                                    "if(window.NativeBridge&&window.NativeBridge.setStatus)window.NativeBridge.setStatus(\"" + escapeJs(text) + "\");", null);
                             }
                         });
                     }
@@ -1764,9 +1756,9 @@ $FULLSCREEN_SETUP
                             @Override
                             public void run() {
                                 webView.evaluateJavascript(
-                                        "if(window.AndroidBridge && window.AndroidBridge.setProgress)window.AndroidBridge.setProgress(" + bytesDone + "," + bytesTotal
-                                                + ",\"" + escapeJs(current) + "\"," + currentDone + ","
-                                                + currentTotal + ");", null);
+                                    "if(window.NativeBridge&&window.NativeBridge.setProgress)window.NativeBridge.setProgress(" + bytesDone + "," + bytesTotal
+                                        + ",\"" + escapeJs(current) + "\"," + currentDone + ","
+                                        + currentTotal + ");", null);
                             }
                         });
                     }
@@ -1777,7 +1769,7 @@ $FULLSCREEN_SETUP
                             @Override
                             public void run() {
                                 webView.evaluateJavascript(
-                                        "if(window.AndroidBridge && window.AndroidBridge.setWarning)window.AndroidBridge.setWarning(\"" + escapeJs(text) + "\");", null);
+                                    "if(window.NativeBridge&&window.NativeBridge.setWarning)window.NativeBridge.setWarning(\"" + escapeJs(text) + "\");", null);
                             }
                         });
                     }
