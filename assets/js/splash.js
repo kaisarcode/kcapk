@@ -14,11 +14,6 @@
     var pendingProgress = null;
     var pendingWarning = null;
 
-    /**
-     * Formats a byte count for display.
-     * @param n Byte count.
-     * @return Formatted string.
-     */
     function fmt(n) {
         n = Math.max(0, n);
         if (n < 1024) return n + ' B';
@@ -26,26 +21,11 @@
         return (n / 1048576).toFixed(1) + ' MiB';
     }
 
-    /**
-     * Computes the integer percentage of done over total.
-     * @param done Bytes done.
-     * @param total Bytes total.
-     * @return Percentage 0..100.
-     */
     function percent(done, total) {
         if (total <= 0) return 0;
         return Math.min(100, Math.floor(100 * done / total));
     }
 
-    /**
-     * Computes the progress value handed to the registered render callback.
-     * @param done Aggregate bytes done.
-     * @param total Aggregate bytes total.
-     * @param current Current file label.
-     * @param curDone Current file bytes done.
-     * @param curTotal Current file bytes total.
-     * @return Progress value object.
-     */
     function computeProgress(done, total, current, curDone, curTotal) {
         var parts = [];
         if (current && current !== '') {
@@ -65,12 +45,6 @@
         };
     }
 
-    /**
-     * Calls a callback with a value, or buffers it when no callback is set.
-     * @param fn Callback or null.
-     * @param value Value to deliver.
-     * @return Buffered value when no callback is set, null otherwise.
-     */
     function deliver(fn, value) {
         if (fn) {
             fn(value);
@@ -79,40 +53,49 @@
         return value;
     }
 
-    /**
-     * Receives provisioning status text from the native bridge.
-     * @param s Status text.
-     */
-    window.NativeBridge.setStatus = function (s) {
-        pendingStatus = deliver(statusFn, s);
-    };
+    function setupNativeBridge() {
+        if (!window.NativeBridge) {
+            window.NativeBridge = {};
+        }
 
-    /**
-     * Receives provisioning progress from the native bridge.
-     * @param done Aggregate bytes done.
-     * @param total Aggregate bytes total.
-     * @param current Current file label.
-     * @param curDone Current file bytes done.
-     * @param curTotal Current file bytes total.
-     */
-    window.NativeBridge.setProgress = function (done, total, current, curDone, curTotal) {
-        pendingProgress = deliver(progressFn, computeProgress(done, total, current, curDone, curTotal));
-    };
+        window.NativeBridge.setStatus = function (s) {
+            pendingStatus = deliver(statusFn, s);
+        };
 
-    /**
-     * Receives provisioning warning text from the native bridge.
-     * @param w Warning text.
-     */
-    window.NativeBridge.setWarning = function (w) {
-        pendingWarning = deliver(warningFn, w);
-    };
+        window.NativeBridge.setProgress = function (done, total, current, curDone, curTotal) {
+            pendingProgress = deliver(progressFn, computeProgress(done, total, current, curDone, curTotal));
+        };
+
+        window.NativeBridge.setWarning = function (w) {
+            pendingWarning = deliver(warningFn, w);
+        };
+
+        window.NativeBridge.invoke = function (method, params) {
+            return new Promise(function (resolve, reject) {
+                try {
+                    var paramsJson = JSON.stringify({
+                        id: String(Date.now()),
+                        method: method,
+                        params: params === undefined ? null : params
+                    });
+                    var resultJson = window.NativeBridge._invoke(method, paramsJson);
+                    var result = JSON.parse(resultJson);
+                    if (result.ok) {
+                        resolve(result.result !== undefined ? result.result : {ok: true});
+                    } else {
+                        reject(result.error || {code: 'INTERNAL_ERROR', message: 'Bridge error'});
+                    }
+                } catch (e) {
+                    reject({code: 'INTERNAL_ERROR', message: String(e)});
+                }
+            });
+        };
+    }
+
+    setupNativeBridge();
 
     window.KcSplash = {};
 
-    /**
-     * Registers the render callback for status text.
-     * @param fn Function receiving the status string.
-     */
     window.KcSplash.onStatus = function (fn) {
         statusFn = fn;
         if (pendingStatus !== null) {
@@ -121,10 +104,6 @@
         }
     };
 
-    /**
-     * Registers the render callback for progress values.
-     * @param fn Function receiving the progress value object.
-     */
     window.KcSplash.onProgress = function (fn) {
         progressFn = fn;
         if (pendingProgress !== null) {
@@ -133,10 +112,6 @@
         }
     };
 
-    /**
-     * Registers the render callback for warning text.
-     * @param fn Function receiving the warning string.
-     */
     window.KcSplash.onWarning = function (fn) {
         warningFn = fn;
         if (pendingWarning !== null) {

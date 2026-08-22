@@ -248,6 +248,8 @@ PROVISIONER_FILE="$SRC_DIR/Provisioner.java"
 KCLIB_BRIDGE_PACKAGE="com.kaisarcode.kclib"
 KCLIB_BRIDGE_DIR="$BASE_DIR/src/main/java/com/kaisarcode/kclib"
 KCLIB_BRIDGE_FILE="$KCLIB_BRIDGE_DIR/KclibBridge.java"
+NATIVE_BRIDGE_DIR="$SRC_DIR"
+NATIVE_BRIDGE_FILE="$NATIVE_BRIDGE_DIR/NativeBridge.java"
 
 UNSIGNED_APK_TEMP="$TEMP_ROOT_DIR/unsigned.apk"
 ALIGNED_APK_TEMP="$TEMP_ROOT_DIR/aligned.apk"
@@ -849,15 +851,12 @@ public class Provisioner {
             nativeLoadError = "libjni.so not provisioned";
             return false;
         }
-        try {
-            Class.forName("com.kaisarcode.kclib.KclibBridge");
-            nativeLoaded = true;
-            nativeLoadError = null;
-            return true;
-        } catch (Throwable t) {
-            nativeLoadError = "load KclibBridge: " + String.valueOf(t.getMessage());
+        if (!KclibBridge.ensureLoaded(lib.getAbsolutePath())) {
+            nativeLoadError = "load libjni.so failed";
             return false;
         }
+        nativeLoaded = true;
+        return true;
     }
 
     public static String nativeLoadError() {
@@ -1479,24 +1478,120 @@ EOF
 cat << EOF > "$KCLIB_BRIDGE_FILE"
 package $KCLIB_BRIDGE_PACKAGE;
 
-// JNI facade for the libjni native bridge. libjni.so is loaded via
-// System.loadLibrary at class init time; it reads the kclib whitelist from
-// AndroidManifest.xml metadata and registers the native "run" method.
+import java.io.File;
+
 public final class KclibBridge {
-    static {
-        try {
-            System.loadLibrary("jni");
-        } catch (Throwable t) {
-            android.util.Log.e("KclibBridge", "loadLibrary jni: " + t.getMessage());
-        }
-    }
+    private static boolean loaded = false;
 
     public KclibBridge() {
+    }
+
+    public static synchronized boolean ensureLoaded(String libPath) {
+        if (loaded) {
+            return true;
+        }
+        File lib = new File(libPath);
+        if (!lib.isFile()) {
+            return false;
+        }
+        try {
+            System.load(lib.getAbsolutePath());
+            loaded = true;
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     public static native String run(String payloadJson);
 }
 EOF
+
+cat << NEOF > "$NATIVE_BRIDGE_FILE"
+package $PACKAGE_NAME;
+
+import android.content.Context;
+import android.webkit.JavascriptInterface;
+import android.webkit.WebView;
+
+import org.json.JSONObject;
+
+import com.kaisarcode.kclib.KclibBridge;
+
+public class NativeBridge {
+    private final WebView webView;
+    private final Context context;
+
+    public NativeBridge(Context context, WebView webView) {
+        this.context = context;
+        this.webView = webView;
+    }
+
+    @JavascriptInterface
+    public void setStatus(String s) {
+    }
+
+    @JavascriptInterface
+    public void setProgress(long done, long total, String current, long curDone, long curTotal) {
+    }
+
+    @JavascriptInterface
+    public void setWarning(String w) {
+    }
+
+    @JavascriptInterface
+    public String _invoke(String method, String paramsJson) {
+        String id = "";
+        String rawPayload = paramsJson;
+        try {
+            JSONObject msg = new JSONObject(paramsJson);
+            id = msg.optString("id", "");
+            if (msg.has("params")) {
+                Object p = msg.get("params");
+                rawPayload = p.toString();
+            }
+        } catch (Exception ignored) {
+        }
+
+        if (!Provisioner.ensureNative(context)) {
+            try {
+                JSONObject errObj = new JSONObject();
+                errObj.put("id", id);
+                errObj.put("ok", false);
+                JSONObject err = new JSONObject();
+                err.put("code", "KCLIB_FAILED");
+                err.put("message", Provisioner.nativeLoadError());
+                errObj.put("error", err);
+                return errObj.toString();
+            } catch (Exception e) {
+                return "{\"id\":\"" + id + "\",\"ok\":false,\"error\":{\"code\":\"KCLIB_FAILED\",\"message\":\"native bridge unavailable\"}}";
+            }
+        }
+
+        String result = KclibBridge.run(rawPayload);
+
+        try {
+            JSONObject resObj = new JSONObject();
+            resObj.put("id", id);
+            if (result != null && result.startsWith("{\"ok\":")) {
+                JSONObject inner = new JSONObject(result);
+                resObj.put("ok", inner.opt("ok"));
+                if (inner.has("result")) resObj.put("result", inner.get("result"));
+                if (inner.has("error")) resObj.put("error", inner.get("error"));
+            } else {
+                resObj.put("ok", false);
+                JSONObject err = new JSONObject();
+                err.put("code", "KCLIB_FAILED");
+                err.put("message", result != null ? result : "null result");
+                resObj.put("error", err);
+            }
+            return resObj.toString();
+        } catch (Exception e) {
+            return "{\"id\":\"" + id + "\",\"ok\":false,\"error\":{\"code\":\"KCLIB_FAILED\",\"message\":\"internal error\"}}";
+        }
+    }
+}
+NEOF
 
 cat << EOF > "$JS_INTERFACE_FILE"
 package $PACKAGE_NAME;
@@ -1660,23 +1755,6 @@ public class MainActivity extends Activity {
     private static final String JS_INTERFACE_NAME = "AndroidBridge";
     private static final String[] TRUSTED_ORIGINS = { $JAVA_TRUSTED_ORIGINS };
 
-    private static final String NATIVE_BRIDGE_SCRIPT =
-        "(function(){if(window.NativeBridge){return;}"
-        + "var __kcPending={};var __kcSeq=0;"
-        + "function __kcReceive(msg){if(msg&&typeof msg.id==='" + "'" + "string'){"
-        + "var p=__kcPending[msg.id];if(p){delete __kcPending[msg.id];"
-        + "if(msg.ok){p.resolve(msg.result!==undefined?msg.result:{ok:true});}"
-        + "else{p.reject(msg.error||{code:'INTERNAL_ERROR',message:'Bridge error'});}}return;}}"
-        + "window.__kcReceive=__kcReceive;"
-        + "window.NativeBridge={};function __kcSend(method,params){"
-        + "return new Promise(function(resolve,reject){"
-        + "var id=String(++__kcSeq);__kcPending[id]={resolve:resolve,reject:reject};"
-        + "KclibBridge.run(JSON.stringify({id:id,method:method,params:params===undefined?null:params}));});}"
-        + "window.NativeBridge.invoke=function(method,params){return __kcSend(method,params);};"
-        + "window.NativeBridge.setStatus=function(s){};"
-        + "window.NativeBridge.setProgress=function(d,t,c,cd,ct){};"
-        + "window.NativeBridge.setWarning=function(w){};}());";
-
     private WebView webView;
     private JSBridge jsBridge;
     private String homeUrl = null;
@@ -1717,7 +1795,6 @@ $FULLSCREEN_SETUP
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 jsBridge.setCurrentUrl(url);
-                view.evaluateJavascript(NATIVE_BRIDGE_SCRIPT, null);
                 if (homeUrl != null && homeUrl.equals(url)) {
                     view.clearHistory();
                     homeUrl = null;
@@ -1726,6 +1803,7 @@ $FULLSCREEN_SETUP
         });
         webView.addJavascriptInterface(jsBridge, JS_INTERFACE_NAME);
         webView.addJavascriptInterface(new KclibBridge(), "KclibBridge");
+        webView.addJavascriptInterface(new NativeBridge(this, webView), "NativeBridge");
 
         webView.loadDataWithBaseURL(splashBaseUrl(), loadSplashPage(), "text/html", "UTF-8", null);
 
@@ -1919,6 +1997,7 @@ javac -g:none --release 11 \
     "$MAIN_ACTIVITY_FILE" \
     "$JS_INTERFACE_FILE" \
     "$KCLIB_BRIDGE_FILE" \
+    "$NATIVE_BRIDGE_FILE" \
     "$PROVISIONER_FILE" || { echo "Error: JAVAC failed."; exit 1; }
 
 echo "Packaging .class files into temporary JAR..."
