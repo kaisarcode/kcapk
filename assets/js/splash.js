@@ -13,6 +13,8 @@
     var pendingStatus = null;
     var pendingProgress = null;
     var pendingWarning = null;
+    var invokeSeq = 0;
+    var invokePending = {};
 
     function fmt(n) {
         n = Math.max(0, n);
@@ -71,23 +73,36 @@
         };
 
         window.NativeBridge.invoke = function (method, params) {
+            var id = String(++invokeSeq);
             return new Promise(function (resolve, reject) {
+                invokePending[id] = {resolve: resolve, reject: reject};
                 try {
                     var paramsJson = JSON.stringify({
+                        id: id,
                         method: method,
                         params: params === undefined ? null : params
                     });
-                    var resultJson = window.NativeBridge._invoke(method, paramsJson);
-                    var result = JSON.parse(resultJson);
-                    if (result.ok) {
-                        resolve(result.result !== undefined ? result.result : {ok: true});
-                    } else {
-                        reject(result.error || {code: 'INTERNAL_ERROR', message: 'Bridge error'});
-                    }
+                    window.NativeBridge._invoke(method, paramsJson);
                 } catch (e) {
+                    delete invokePending[id];
                     reject({code: 'INTERNAL_ERROR', message: String(e)});
                 }
             });
+        };
+
+        window.NativeBridge._receive = function (id, response) {
+            var pending = invokePending[id];
+            if (!pending) return;
+            delete invokePending[id];
+            if (!response || typeof response !== 'object') {
+                pending.reject({code: 'INTERNAL_ERROR', message: 'Invalid bridge response'});
+                return;
+            }
+            if (response.ok) {
+                pending.resolve(response.result !== undefined ? response.result : {ok: true});
+            } else {
+                pending.reject(response.error || {code: 'INTERNAL_ERROR', message: 'Bridge error'});
+            }
         };
     }
 

@@ -16,7 +16,7 @@
     var INDEX_PORT = 9001;
     var REMOTE_HOST = '190.105.227.97';
     var REMOTE_PORT = 9001;
-    var REMOTE_PASS = '!@PPWOyq#cAOYT69a70rVl2y@YVe*T*y9LprWrXysjr3WBuSLNUvvBMNBeh';
+    var REMOTE_PASS = 'AqKT3xFR4kWKhC7pxq26kE56DpSy7Fb6uvoXNWkuPz6m2pDwbkDzEoUjdAP';
     var PUB_ID = 'kcapk';
     var CON_LISTEN_TCP = 40001;
     var results = [];
@@ -206,44 +206,60 @@
             });
     }
 
+    /**
+     * Waits for the given number of milliseconds.
+     * @param ms Delay in milliseconds.
+     * @return Promise resolving after the delay.
+     */
+    function delay(ms) {
+        return new Promise(function (resolve) {
+            setTimeout(resolve, ms);
+        });
+    }
+
     function runIndexTest() {
+        // Each block runs strictly sequentially: concurrent runner calls race
+        // for the native mutex and may execute out of order, so a stop/close
+        // could otherwise kill the index before the pending list completes.
         startIndex(INDEX_PORT)
             .then(function (handle) {
-                if (handle === null) return;
-                setTimeout(function () {
-                    readStatus(handle);
-                    listPublishers('127.0.0.1', INDEX_PORT);
-                    stopOperation(handle);
-                    closeHandle(handle);
-                    listPublishers(REMOTE_HOST, REMOTE_PORT);
-                }, 1500);
+                if (handle === null) {
+                    return null;
+                }
+                return delay(1500)
+                    .then(function () { return readStatus(handle); })
+                    .then(function () { return listPublishers('127.0.0.1', INDEX_PORT); })
+                    .then(function () { return stopOperation(handle); })
+                    .then(function () { return closeHandle(handle); });
+            })
+            .then(function () { return listPublishers(REMOTE_HOST, REMOTE_PORT); })
+            .then(function () {
+                return startPub(PUB_ID, REMOTE_HOST, REMOTE_PORT);
+            })
+            .then(function (pub) {
+                if (pub === null) {
+                    return null;
+                }
+                return delay(3000)
+                    .then(function () { return readStatus(pub); })
+                    .then(function () { return listPublishers(REMOTE_HOST, REMOTE_PORT); })
+                    .then(function () { return stopOperation(pub); })
+                    .then(function () { return closeHandle(pub); });
+            })
+            .then(function () { return startCon(); })
+            .then(function (con) {
+                if (con === null) {
+                    return null;
+                }
+                return delay(3000)
+                    .then(function () { return readStatus(con); })
+                    .then(function () { return listPublishers(REMOTE_HOST, REMOTE_PORT); })
+                    .then(function () { return stopOperation(con); })
+                    .then(function () { return closeHandle(con); });
+            })
+            .then(function () {
+                printSummary();
             });
-
-        setTimeout(function () {
-            startPub(PUB_ID, REMOTE_HOST, REMOTE_PORT)
-                .then(function (pub) {
-                    if (pub === null) return;
-                    setTimeout(function () {
-                        readStatus(pub);
-                        listPublishers(REMOTE_HOST, REMOTE_PORT);
-                    }, 3000);
-                });
-        }, 3500);
-
-        setTimeout(function () {
-            startCon()
-                .then(function (con) {
-                    if (con === null) return;
-                    setTimeout(function () {
-                        readStatus(con);
-                        listPublishers(REMOTE_HOST, REMOTE_PORT);
-                        setTimeout(function () {
-                            printSummary();
-                        }, 500);
-                    }, 3000);
-                });
-        }, 7000);
-        return 0;
     }
 
     runIndexTest();
