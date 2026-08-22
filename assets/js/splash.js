@@ -74,7 +74,6 @@
             return new Promise(function (resolve, reject) {
                 try {
                     var paramsJson = JSON.stringify({
-                        id: String(Date.now()),
                         method: method,
                         params: params === undefined ? null : params
                     });

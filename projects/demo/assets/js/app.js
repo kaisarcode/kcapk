@@ -167,7 +167,8 @@
             addr: addr,
             pass: '1234',
             tcp: 40002,
-            sweep: 0
+            sweep: 0,
+            state_dir: keysDir ? keysDir + '/redp2p' : ''
         };
         if (keysDir) args.keys_dir = keysDir;
         return runCommand('open', args)

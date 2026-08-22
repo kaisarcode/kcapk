@@ -1591,13 +1591,6 @@ public class NativeBridge {
         } catch (Exception ignored) {
         }
 
-        for (int retry = 0; retry < 5; retry++) {
-            if (Provisioner.ensureNative(context)) {
-                break;
-            }
-            try { Thread.sleep(500); } catch (InterruptedException ignored) {}
-        }
-
         if (!Provisioner.ensureNative(context)) {
             try {
                 JSONObject errObj = new JSONObject();
