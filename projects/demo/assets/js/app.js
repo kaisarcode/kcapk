@@ -16,6 +16,7 @@
     var INDEX_PORT = 9001;
     var REMOTE_HOST = '190.105.227.97';
     var REMOTE_PORT = 9001;
+    var REMOTE_PASS = '!@PPWOyq#cAOYT69a70rVl2y@YVe*T*y9LprWrXysjr3WBuSLNUvvBMNBeh';
     var PUB_ID = 'kcapk';
     var CON_LISTEN_TCP = 40001;
     var results = [];
@@ -165,7 +166,7 @@
         var args = {
             op: 'pub',
             addr: addr,
-            pass: '1234',
+            pass: REMOTE_PASS,
             tcp: 40002,
             sweep: 0,
             state_dir: keysDir ? keysDir + '/redp2p' : ''
