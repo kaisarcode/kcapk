@@ -243,19 +243,19 @@
                 return delay(3000)
                     .then(function () { return readStatus(pub); })
                     .then(function () { return listPublishers(REMOTE_HOST, REMOTE_PORT); })
+                    .then(function () { return startCon(); })
+                    .then(function (con) {
+                        if (con === null) {
+                            return null;
+                        }
+                        return delay(3000)
+                            .then(function () { return readStatus(con); })
+                            .then(function () { return listPublishers(REMOTE_HOST, REMOTE_PORT); })
+                            .then(function () { return stopOperation(con); })
+                            .then(function () { return closeHandle(con); });
+                    })
                     .then(function () { return stopOperation(pub); })
                     .then(function () { return closeHandle(pub); });
-            })
-            .then(function () { return startCon(); })
-            .then(function (con) {
-                if (con === null) {
-                    return null;
-                }
-                return delay(3000)
-                    .then(function () { return readStatus(con); })
-                    .then(function () { return listPublishers(REMOTE_HOST, REMOTE_PORT); })
-                    .then(function () { return stopOperation(con); })
-                    .then(function () { return closeHandle(con); });
             })
             .then(function () {
                 printSummary();
