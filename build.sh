@@ -605,6 +605,7 @@ KCLIB_ENTRIES=""
 # @param binary  Library file name (e.g. libjni.so).
 # @param name    kclib project name without extension (e.g. jni).
 # @param arch    ABI directory name (aarch64 or armv7).
+# @return None.
 add_kclib_entry () {
     entry_project="$1"
     entry_binary="$2"
@@ -634,7 +635,7 @@ for KCLIB_ARCH in aarch64 armv7; do
 done
 
 printf '{"timestamp":%s,"libs":[%s]}' "$KCLIB_TIMESTAMP" "$KCLIB_ENTRIES" > "$ASSETS_DIR/kclib/manifest.json"
-echo "embedded kclib manifest: $(ls "$ASSETS_DIR"/kclib/*/ | wc -l) libraries staged"
+echo "embedded kclib manifest: $(find "$ASSETS_DIR/kclib" -mindepth 2 -type f | wc -l) libraries staged"
 
 JAVA_TRUSTED_ORIGINS=""
 for ORIGIN in $TRUSTED_ORIGINS; do

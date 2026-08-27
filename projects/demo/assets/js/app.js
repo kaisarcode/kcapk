@@ -21,16 +21,32 @@
     var CON_LISTEN_TCP = 40001;
     var results = [];
 
+    /**
+     * Appends one line to the on-screen test output and the console.
+     * @param text Line to append.
+     * @return None.
+     */
     function log(text) {
         if (output) output.textContent += text + '\n';
         console.log('LOG: ' + text);
     }
 
+    /**
+     * Stores one test outcome and prints its PASS or FAIL line.
+     * @param name Test name.
+     * @param ok True when the test passed.
+     * @param detail Optional result detail appended to the line.
+     * @return None.
+     */
     function recordResult(name, ok, detail) {
         results.push({name: name, ok: ok, detail: detail || ''});
         log((ok ? 'PASS' : 'FAIL') + ' ' + name + (detail ? ' - ' + detail : ''));
     }
 
+    /**
+     * Prints the final PASS and FAIL counts collected so far.
+     * @return None.
+     */
     function printSummary() {
         var passed = 0, failed = 0;
         for (var i = 0; i < results.length; i++) {
@@ -217,10 +233,11 @@
         });
     }
 
+    /**
+     * Runs the local index, remote publish, and consumer tests in order.
+     * @return None.
+     */
     function runIndexTest() {
-        // Each block runs strictly sequentially: concurrent runner calls race
-        // for the native mutex and may execute out of order, so a stop/close
-        // could otherwise kill the index before the pending list completes.
         startIndex(INDEX_PORT)
             .then(function (handle) {
                 if (handle === null) {

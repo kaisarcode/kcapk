@@ -16,6 +16,11 @@
     var invokeSeq = 0;
     var invokePending = {};
 
+    /**
+     * Formats a byte count as a compact human-readable string.
+     * @param n Byte count to format.
+     * @return Formatted size such as "512 B" or "1.5 MiB".
+     */
     function fmt(n) {
         n = Math.max(0, n);
         if (n < 1024) return n + ' B';
@@ -23,11 +28,26 @@
         return (n / 1048576).toFixed(1) + ' MiB';
     }
 
+    /**
+     * Computes an integer percentage clamped to 0-100.
+     * @param done Completed byte count.
+     * @param total Total byte count.
+     * @return Percentage from 0 to 100.
+     */
     function percent(done, total) {
         if (total <= 0) return 0;
         return Math.min(100, Math.floor(100 * done / total));
     }
 
+    /**
+     * Builds the progress snapshot handed to the page render callback.
+     * @param done Aggregate completed byte count.
+     * @param total Aggregate total byte count.
+     * @param current Name of the file being downloaded.
+     * @param curDone Completed byte count of the current file.
+     * @param curTotal Total byte count of the current file.
+     * @return Progress snapshot for the page render callback.
+     */
     function computeProgress(done, total, current, curDone, curTotal) {
         var parts = [];
         if (current && current !== '') {
@@ -47,6 +67,12 @@
         };
     }
 
+    /**
+     * Delivers a value to a registered callback or parks it until registration.
+     * @param fn Registered render callback or null.
+     * @param value Value produced by the bridge.
+     * @return Null when delivered, otherwise the parked value.
+     */
     function deliver(fn, value) {
         if (fn) {
             fn(value);
@@ -55,6 +81,11 @@
         return value;
     }
 
+    /**
+     * Installs the NativeBridge shims: events park until callbacks register,
+     * and invoke responses settle their Promises.
+     * @return None.
+     */
     function setupNativeBridge() {
         if (!window.NativeBridge) {
             window.NativeBridge = {};
