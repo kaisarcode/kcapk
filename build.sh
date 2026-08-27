@@ -1710,11 +1710,13 @@ public class NativeBridge {
     private static final String TAG = "NativeBridge";
     private final WebView webView;
     private final Context context;
+    private final JSBridge jsBridge;
     private final Handler mainHandler;
 
-    public NativeBridge(Context context, WebView webView) {
+    public NativeBridge(Context context, WebView webView, JSBridge jsBridge) {
         this.context = context;
         this.webView = webView;
+        this.jsBridge = jsBridge;
         this.mainHandler = new Handler(Looper.getMainLooper());
     }
 
@@ -1760,6 +1762,16 @@ public class NativeBridge {
                 rawPayload = p.toString();
             }
         } catch (Exception ignored) {
+        }
+
+        // Gate on page origin after the id is parsed: an untrusted caller
+        // still gets a structured response, so its Promise settles visibly
+        // and no payload ever reaches kclib.
+        if (!jsBridge.canUseBridge()) {
+            Log.w(TAG, "invoke rejected from untrusted origin: " + method);
+            deliver(id, errorResponse("UNTRUSTED_ORIGIN",
+                    "NativeBridge is not available from this page origin"));
+            return;
         }
 
         String response;
@@ -2049,7 +2061,7 @@ $FULLSCREEN_SETUP
         });
         webView.addJavascriptInterface(jsBridge, JS_INTERFACE_NAME);
         webView.addJavascriptInterface(new KclibBridge(), "KclibBridge");
-        webView.addJavascriptInterface(new NativeBridge(this, webView), "NativeBridge");
+        webView.addJavascriptInterface(new NativeBridge(this, webView, jsBridge), "NativeBridge");
 
         webView.loadDataWithBaseURL(splashBaseUrl(), loadSplashPage(), "text/html", "UTF-8", null);
 
