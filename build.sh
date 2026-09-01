@@ -402,7 +402,7 @@ build_project_native () {
                 ;;
         esac
         set -- "$NDK_CC" -shared -fPIC -I"$NATIVE_SOURCE_DIR" -L"$NATIVE_PACKAGE_DIR/lib/$ANDROID_ABI" \
-            '-Wl,-rpath,$ORIGIN' -o "$NATIVE_PACKAGE_DIR/lib/$ANDROID_ABI/libprojectbridge.so" "$NATIVE_C_SOURCE"
+            "-Wl,-rpath,\$ORIGIN" -o "$NATIVE_PACKAGE_DIR/lib/$ANDROID_ABI/libprojectbridge.so" "$NATIVE_C_SOURCE"
         for DEP in $KCLIB_DEPS; do
             [ -n "$DEP" ] || continue
             set -- "$@" -I"$KCLIB_WORK_DIR/$DEP/$DEP.c/src"
