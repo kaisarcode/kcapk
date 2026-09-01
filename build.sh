@@ -140,6 +140,8 @@ PACKAGE_NAME="$(cfg package_name)"
 PACKAGE_NAME="${PACKAGE_NAME:-com.kaisarcode.$PROJECT_NAME}"
 ICON_SOURCE_FILE="$(cfg icon)"
 ICON_SOURCE_FILE="${ICON_SOURCE_FILE:-icon.svg}"
+ICON_BACKGROUND="$(cfg icon_background)"
+ICON_BACKGROUND="${ICON_BACKGROUND:-#1a1a1a}"
 IS_FULLSCREEN="$(cfg fullscreen)"
 IS_FULLSCREEN="${IS_FULLSCREEN:-false}"
 VERSION_CODE="$(cfg version_code)"
@@ -202,6 +204,7 @@ MIPMAP_HDPI_DIR="$RES_DIR/mipmap-hdpi"
 MIPMAP_XHDPI_DIR="$RES_DIR/mipmap-xhdpi"
 MIPMAP_XXHDPI_DIR="$RES_DIR/mipmap-xxhdpi"
 MIPMAP_XXXHDPI_DIR="$RES_DIR/mipmap-xxxhdpi"
+MIPMAP_ANYDPI_V26_DIR="$RES_DIR/mipmap-anydpi-v26"
 
 OUTPUT_DIR="$BASE_DIR/bin"
 TEMP_ROOT_DIR="$BASE_DIR/temp"
@@ -605,13 +608,15 @@ setup_sdk
 
 mkdir -p "$SRC_DIR" "$LAYOUT_DIR" "$VALUES_DIR" "$OUTPUT_DIR" \
     "$MIPMAP_MDPI_DIR" "$MIPMAP_HDPI_DIR" "$MIPMAP_XHDPI_DIR" \
-    "$MIPMAP_XXHDPI_DIR" "$MIPMAP_XXXHDPI_DIR"
+    "$MIPMAP_XXHDPI_DIR" "$MIPMAP_XXXHDPI_DIR" "$MIPMAP_ANYDPI_V26_DIR"
 rm -rf "$TEMP_ROOT_DIR"
 mkdir -p "$TEMP_CLASSES_DIR" "$FLAT_RES_DIR" "$R_PACKAGE_DIR" "$TEMP_BUILD_DATA_DIR" "$AAB_TEMP_DIR" \
     "$KCLIB_WORK_DIR" "$NATIVE_PACKAGE_DIR"
 
 DENSITY_PAIRS="mdpi:48x48 hdpi:72x72 xhdpi:96x96 xxhdpi:144x144 xxxhdpi:192x192"
+FOREGROUND_DENSITY_PAIRS="mdpi:108x108 hdpi:162x162 xhdpi:216x216 xxhdpi:324x324 xxxhdpi:432x432"
 ICON_TEMP_FILE="$RES_DIR/temp_icon_file_base"
+ICON_RENDER_FILE="$RES_DIR/temp_icon_render.png"
 
 case "$ICON_SOURCE_FILE" in
     http://*|https://*)
@@ -643,6 +648,16 @@ case "$ICON_SOURCE_FILE" in
         ;;
 esac
 
+ICON_RENDER_SOURCE="$ICON_TEMP_FILE"
+case "$ICON_SOURCE_FILE" in
+    *.svg|*.SVG)
+        if command -v rsvg-convert >/dev/null 2>&1; then
+            rsvg-convert -w 432 -h 432 -o "$ICON_RENDER_FILE" "$ICON_TEMP_FILE" || { echo "Error: SVG icon conversion failed." ; exit 1; }
+            ICON_RENDER_SOURCE="$ICON_RENDER_FILE"
+        fi
+        ;;
+esac
+
 if command -v convert >/dev/null 2>&1; then
     for PAIR in $DENSITY_PAIRS; do
         DENSITY=$(echo "$PAIR" | cut -d: -f1)
@@ -651,7 +666,15 @@ if command -v convert >/dev/null 2>&1; then
         MIPMAP_SUBDIR="$RES_DIR/mipmap-$DENSITY"
         ICON_FINAL_PNG="$MIPMAP_SUBDIR/ic_launcher.png"
 
-        convert "$ICON_TEMP_FILE" -resize "$SIZE" "$ICON_FINAL_PNG" || { echo "Error: ImageMagick conversion failed for $DENSITY." ; exit 1; }
+        convert -size "$SIZE" "xc:$ICON_BACKGROUND" "$ICON_RENDER_SOURCE" -resize "$SIZE" -gravity center -composite "$ICON_FINAL_PNG" || { echo "Error: ImageMagick fallback icon generation failed for $DENSITY." ; exit 1; }
+    done
+    for PAIR in $FOREGROUND_DENSITY_PAIRS; do
+        DENSITY=$(echo "$PAIR" | cut -d: -f1)
+        SIZE=$(echo "$PAIR" | cut -d: -f2)
+        MIPMAP_SUBDIR="$RES_DIR/mipmap-$DENSITY"
+        FOREGROUND_FINAL_PNG="$MIPMAP_SUBDIR/ic_launcher_foreground.png"
+
+        convert -background none "$ICON_RENDER_SOURCE" -resize "$SIZE" -gravity center -extent "$SIZE" "$FOREGROUND_FINAL_PNG" || { echo "Error: ImageMagick adaptive icon generation failed for $DENSITY." ; exit 1; }
     done
 else
     echo "Error: 'convert' (ImageMagick) not found. Cannot generate icons."
@@ -659,7 +682,7 @@ else
     exit 1
 fi
 
-rm -f "$ICON_TEMP_FILE"
+rm -f "$ICON_TEMP_FILE" "$ICON_RENDER_FILE"
 
 echo "Icon Generation complete."
 
@@ -732,6 +755,21 @@ cat << EOF > "$VALUES_DIR/strings.xml"
     <string name="app_name">$DISPLAY_NAME</string>
     <string name="js_interface_name">AndroidBridge</string>
 </resources>
+EOF
+
+cat << EOF > "$VALUES_DIR/icon_colors.xml"
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="icon_background">$ICON_BACKGROUND</color>
+</resources>
+EOF
+
+cat << EOF > "$MIPMAP_ANYDPI_V26_DIR/ic_launcher.xml"
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/icon_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>
 EOF
 
 cat << EOF > "$LAYOUT_DIR/activity_main.xml"
@@ -1886,7 +1924,7 @@ build_aab
 
 build_apk
 
-rm -f "$RES_DIR/temp_icon_file_base"
+rm -f "$RES_DIR/temp_icon_file_base" "$RES_DIR/temp_icon_render.png"
 rm -rf "$TEMP_ROOT_DIR"
 
 publish

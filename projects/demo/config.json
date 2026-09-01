@@ -1,7 +1,8 @@
 {
   "display_name": "Demo",
   "package_name": "com.kaisarcode.demo",
-  "icon": "app.png",
+  "icon": "icon.png",
+  "icon_background": "#222222",
   "trusted_origins": ["file:///"],
   "fullscreen": true,
   "version_code": 1,
