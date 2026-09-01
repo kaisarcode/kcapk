@@ -606,6 +606,7 @@ cp -r "$ASSETS_SOURCE/." "$PUBLISH_DIR/www/"
 
 setup_sdk
 
+rm -rf "$BASE_DIR/src/main/java"
 mkdir -p "$SRC_DIR" "$LAYOUT_DIR" "$VALUES_DIR" "$OUTPUT_DIR" \
     "$MIPMAP_MDPI_DIR" "$MIPMAP_HDPI_DIR" "$MIPMAP_XHDPI_DIR" \
     "$MIPMAP_XXHDPI_DIR" "$MIPMAP_XXXHDPI_DIR" "$MIPMAP_ANYDPI_V26_DIR"
@@ -935,13 +936,9 @@ public class Provisioner {
         return uri;
     }
 
-    // Plans and installs every file whose installed copy does not match the
-    // winning source record, kclib native libraries first, then www assets.
-    // Each artifact exists both embedded in the APK and on the server; the
-    // copy with the newest build timestamp wins (the embedded copy wins ties
-    // and also wins when the server is unreachable or carries no timestamp).
-    // Existing files are kept only when their SHA-256 matches the winning
-    // record.
+    // Synchronizes remote web assets when their manifest is newer than the
+    // embedded web build. Existing files are retained only when their SHA-256
+    // matches the manifest record.
     private static void syncWork(Context context, JSONObject appManifest, File filesDir, ProgressListener listener)
             throws IOException {
         List<Pending> pending = new ArrayList<Pending>();
@@ -1006,8 +1003,7 @@ public class Provisioner {
         Log.i(TAG, "provisioning complete");
     }
 
-    // Installs every pending file in order, reporting progress. Embedded
-    // copies stream from the APK assets; the rest download from the server.
+    // Installs every pending web asset in order, reporting progress.
     private static void syncPending(Context context, List<Pending> pending, Progress progress) throws IOException {
         for (Pending p : pending) {
             progress.stage("Downloading " + p.label + "...");
@@ -1164,30 +1160,6 @@ public class Provisioner {
             }
         } finally {
             conn.disconnect();
-        }
-    }
-
-    // Copies a file embedded in the APK assets to the given target, with the
-    // same progress reporting as downloadToFile().
-    private static void copyAssetToFile(Context context, String assetPath, File out, long expected,
-            String label, Progress progress) throws IOException {
-        InputStream in = null;
-        FileOutputStream fos = null;
-        try {
-            in = context.getAssets().open(assetPath);
-            fos = new FileOutputStream(out);
-            byte[] buf = new byte[8192];
-            long done = 0;
-            int n;
-            while ((n = in.read(buf)) > 0) {
-                fos.write(buf, 0, n);
-                done += n;
-                progress.report(label, expected >= 0 ? expected : done, done);
-            }
-            progress.commit(done);
-        } finally {
-            close(in);
-            close(fos);
         }
     }
 
