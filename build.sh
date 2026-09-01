@@ -1,10 +1,8 @@
 #!/bin/sh
 # build.sh
 # Summary: Manifest-driven Android thin-client APK/AAB builder.
-#          Builds a generic WebView shell that provisions kclib native
-#          libraries (libjni.so + lib<name>.so) and web assets from a server
-#          manifest at runtime, and publishes the app manifest + assets + APK
-#          to ../dist/<project>/.
+#          Builds a WebView shell with project-owned native integration and
+#          publishes the app manifest, assets, and APK to ../dist/<project>/.
 # Author:  KaisarCode
 # Website: https://kaisarcode.com
 # License: https://www.gnu.org/licenses/gpl-3.0.html
@@ -156,8 +154,6 @@ BUILD_TOOLS_VERSION="$(cfg build_tools_version)"
 BUILD_TOOLS_VERSION="${BUILD_TOOLS_VERSION:-35.0.0}"
 CMDLINE_TOOLS_VERSION="$(cfg cmdline_tools_version)"
 CMDLINE_TOOLS_VERSION="${CMDLINE_TOOLS_VERSION:-11076708}"
-KCLIB_MANIFEST_URL="$(cfg kclib_manifest_url)"
-KCLIB_MANIFEST_URL="${KCLIB_MANIFEST_URL:-https://kaisarcode.com/kclib/dist/manifest.json}"
 APP_MANIFEST_URL="$(cfg app_manifest_url)"
 APP_MANIFEST_URL="${APP_MANIFEST_URL:-https://kaisarcode.com/kcapk/dist/$PROJECT_NAME/manifest.json}"
 RELEASE_KEYSTORE="$(cfg release_keystore)"
@@ -195,6 +191,9 @@ LAYOUT_DIR="$RES_DIR/layout"
 VALUES_DIR="$RES_DIR/values"
 ASSETS_DIR="$BASE_DIR/assets"
 ASSETS_SOURCE="$APP_DIR/assets"
+NATIVE_SOURCE_DIR="$APP_DIR/native"
+NATIVE_BRIDGE_SOURCE="$NATIVE_SOURCE_DIR/NativeBridge.java"
+NATIVE_C_SOURCE="$NATIVE_SOURCE_DIR/bridge.c"
 COMMON_ASSETS_DIR="assets"
 PUBLISH_DIR="../dist/$PROJECT_NAME"
 
@@ -210,6 +209,8 @@ TEMP_CLASSES_DIR="$TEMP_ROOT_DIR/classes"
 FLAT_RES_DIR="$TEMP_ROOT_DIR/resources"
 TEMP_BUILD_DATA_DIR="$TEMP_ROOT_DIR/build_data"
 AAB_TEMP_DIR="$TEMP_ROOT_DIR/aab_work"
+KCLIB_WORK_DIR="$TEMP_ROOT_DIR/kclib"
+NATIVE_PACKAGE_DIR="$TEMP_ROOT_DIR/native_package"
 
 R_PACKAGE_DIR="$TEMP_CLASSES_DIR/$PACKAGE_SUBPATH"
 TEMP_JAR_FILE="$TEMP_BUILD_DATA_DIR/classes.jar"
@@ -245,11 +246,26 @@ MAIN_ACTIVITY_FILE="$SRC_DIR/MainActivity.java"
 JS_INTERFACE_FILE="$SRC_DIR/JSBridge.java"
 WEBVIEW_CLIENT_FILE="$SRC_DIR/TrustedWebViewClient.java"
 PROVISIONER_FILE="$SRC_DIR/Provisioner.java"
-KCLIB_BRIDGE_PACKAGE="com.kaisarcode.kclib"
-KCLIB_BRIDGE_DIR="$BASE_DIR/src/main/java/com/kaisarcode/kclib"
+NATIVE_BRIDGE_FILE="$SRC_DIR/NativeBridge.java"
+KCLIB_BRIDGE_DIR="$TEMP_ROOT_DIR/obsolete_java"
 KCLIB_BRIDGE_FILE="$KCLIB_BRIDGE_DIR/KclibBridge.java"
-NATIVE_BRIDGE_DIR="$SRC_DIR"
-NATIVE_BRIDGE_FILE="$NATIVE_BRIDGE_DIR/NativeBridge.java"
+
+NATIVE_BRIDGE_REGISTRATION=""
+NATIVE_BRIDGE_JAVA_SOURCE=""
+if [ -f "$NATIVE_BRIDGE_SOURCE" ]; then
+    NATIVE_BRIDGE_REGISTRATION="        webView.addJavascriptInterface(new NativeBridge(this, webView, jsBridge), \"NativeBridge\");"
+    NATIVE_BRIDGE_JAVA_SOURCE="$NATIVE_BRIDGE_FILE"
+fi
+
+KCLIB_DIST_DIR="$(cfg kclib_dist_dir)"
+KCLIB_DIST_DIR="${KCLIB_DIST_DIR:-../../kclib/dist}"
+ANDROID_NDK_ROOT_CFG="$(cfg android_ndk_root)"
+if [ -n "$ANDROID_NDK_ROOT_CFG" ]; then
+    ANDROID_NDK_ROOT="$ANDROID_NDK_ROOT_CFG"
+elif [ -z "${ANDROID_NDK_ROOT:-}" ]; then
+    ANDROID_NDK_ROOT="$HOME/.local/share/android-sdk/ndk/27.2.12479018"
+fi
+NDK_TOOLCHAIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
 
 UNSIGNED_APK_TEMP="$TEMP_ROOT_DIR/unsigned.apk"
 ALIGNED_APK_TEMP="$TEMP_ROOT_DIR/aligned.apk"
@@ -336,6 +352,68 @@ setup_release_signing () {
     fi
 }
 
+# Prepares declared kclib headers and Android shared libraries for one build.
+# @return 0 when every declared dependency is ready.
+prepare_kclib_dependencies () {
+    [ -d "$KCLIB_DIST_DIR" ] || { echo "error: kclib dist directory not found: $KCLIB_DIST_DIR" >&2; exit 1; }
+
+    for DEP in $KCLIB_DEPS; do
+        [ -n "$DEP" ] || continue
+        DEP_DIST_DIR="$KCLIB_DIST_DIR/$DEP.c"
+        DEP_ZIP="$DEP_DIST_DIR/source.zip"
+        DEP_WORK_DIR="$KCLIB_WORK_DIR/$DEP"
+        DEP_HEADER_DIR="$DEP_WORK_DIR/$DEP.c/src"
+
+        [ -f "$DEP_ZIP" ] || { echo "error: kclib source package not found: $DEP_ZIP" >&2; exit 1; }
+        unzip -q "$DEP_ZIP" -d "$DEP_WORK_DIR" || { echo "error: failed to extract: $DEP_ZIP" >&2; exit 1; }
+        [ -f "$DEP_HEADER_DIR/lib$DEP.h" ] || { echo "error: kclib public header not found: $DEP_HEADER_DIR/lib$DEP.h" >&2; exit 1; }
+
+        for KCLIB_ARCH in aarch64 armv7; do
+            case "$KCLIB_ARCH" in
+                aarch64) ANDROID_ABI="arm64-v8a" ;;
+                armv7) ANDROID_ABI="armeabi-v7a" ;;
+            esac
+            DEP_SO="$DEP_DIST_DIR/$KCLIB_ARCH/android/lib$DEP.so"
+            [ -f "$DEP_SO" ] || { echo "error: kclib Android library not found: $DEP_SO" >&2; exit 1; }
+            mkdir -p "$NATIVE_PACKAGE_DIR/lib/$ANDROID_ABI"
+            cp "$DEP_SO" "$NATIVE_PACKAGE_DIR/lib/$ANDROID_ABI/lib$DEP.so"
+        done
+
+    done
+}
+
+# Builds project JNI code for the Android ABIs supported by kcapk.
+# @return 0 when no project native code exists or both outputs compile.
+build_project_native () {
+    [ -f "$NATIVE_C_SOURCE" ] || return 0
+    [ -f "$NATIVE_BRIDGE_SOURCE" ] || { echo "error: project native C source requires $NATIVE_BRIDGE_SOURCE" >&2; exit 1; }
+    [ -x "$NDK_TOOLCHAIN/bin/aarch64-linux-android$MIN_SDK-clang" ] || { echo "error: Android NDK compiler not found under: $NDK_TOOLCHAIN" >&2; exit 1; }
+
+    for KCLIB_ARCH in aarch64 armv7; do
+        case "$KCLIB_ARCH" in
+            aarch64)
+                ANDROID_ABI="arm64-v8a"
+                NDK_CC="$NDK_TOOLCHAIN/bin/aarch64-linux-android$MIN_SDK-clang"
+                ;;
+            armv7)
+                ANDROID_ABI="armeabi-v7a"
+                NDK_CC="$NDK_TOOLCHAIN/bin/armv7a-linux-androideabi$MIN_SDK-clang"
+                ;;
+        esac
+        set -- "$NDK_CC" -shared -fPIC -I"$NATIVE_SOURCE_DIR" -L"$NATIVE_PACKAGE_DIR/lib/$ANDROID_ABI" \
+            '-Wl,-rpath,$ORIGIN' -o "$NATIVE_PACKAGE_DIR/lib/$ANDROID_ABI/libprojectbridge.so" "$NATIVE_C_SOURCE"
+        for DEP in $KCLIB_DEPS; do
+            [ -n "$DEP" ] || continue
+            set -- "$@" -I"$KCLIB_WORK_DIR/$DEP/$DEP.c/src"
+        done
+        for DEP in $KCLIB_DEPS; do
+            [ -n "$DEP" ] || continue
+            set -- "$@" -l"$DEP"
+        done
+        "$@" || { echo "error: project native compilation failed for $KCLIB_ARCH" >&2; exit 1; }
+    done
+}
+
 # Builds the Android App Bundle.
 # @return None.
 build_aab () {
@@ -377,10 +455,13 @@ build_aab () {
     mkdir -p "$FINAL_MODULE_DIR/dex"
     cp "$DEX_FILE" "$FINAL_MODULE_DIR/dex/classes.dex"
 
+    if [ -d "$NATIVE_PACKAGE_DIR/lib" ]; then
+        cp -R "$NATIVE_PACKAGE_DIR/lib" "$FINAL_MODULE_DIR/lib"
+    fi
     if [ -d "$FINAL_MODULE_DIR/assets" ]; then
-        (cd "$FINAL_MODULE_DIR" && zip -r -q "$ABS_BASE_MODULE_ZIP" manifest res dex resources.pb assets) || { echo "Error: ZIP tool failed to re-package module."; exit 1; }
+        (cd "$FINAL_MODULE_DIR" && zip -r -q "$ABS_BASE_MODULE_ZIP" manifest res dex resources.pb assets lib) || { echo "Error: ZIP tool failed to re-package module."; exit 1; }
     else
-        (cd "$FINAL_MODULE_DIR" && zip -r -q "$ABS_BASE_MODULE_ZIP" manifest res dex resources.pb) || { echo "Error: ZIP tool failed to re-package module."; exit 1; }
+        (cd "$FINAL_MODULE_DIR" && zip -r -q "$ABS_BASE_MODULE_ZIP" manifest res dex resources.pb lib) || { echo "Error: ZIP tool failed to re-package module."; exit 1; }
     fi
 
     java -jar "$BUNDLETOOL_JAR" build-bundle \
@@ -412,6 +493,13 @@ build_aab () {
 # @return None.
 build_apk () {
     zip -j "$UNSIGNED_APK_TEMP" "$DEX_FILE" || { echo "Error: ZIP tool failed to insert classes.dex." ; exit 1; }
+    if [ -d "$NATIVE_PACKAGE_DIR/lib" ]; then
+        case "$UNSIGNED_APK_TEMP" in
+            /*) ABS_UNSIGNED_APK_TEMP="$UNSIGNED_APK_TEMP" ;;
+            *) ABS_UNSIGNED_APK_TEMP="$(pwd)/$UNSIGNED_APK_TEMP" ;;
+        esac
+        (cd "$NATIVE_PACKAGE_DIR" && zip -r -q "$ABS_UNSIGNED_APK_TEMP" lib) || { echo "Error: ZIP tool failed to package native libraries."; exit 1; }
+    fi
 
     echo "Generating debug KeyStore if it does not exist..."
     if [ ! -f "$DEBUG_KEYSTORE" ]; then
@@ -513,11 +601,12 @@ cp -r "$ASSETS_SOURCE/." "$PUBLISH_DIR/www/"
 
 setup_sdk
 
-mkdir -p "$SRC_DIR" "$KCLIB_BRIDGE_DIR" "$LAYOUT_DIR" "$VALUES_DIR" "$OUTPUT_DIR" \
+mkdir -p "$SRC_DIR" "$LAYOUT_DIR" "$VALUES_DIR" "$OUTPUT_DIR" \
     "$MIPMAP_MDPI_DIR" "$MIPMAP_HDPI_DIR" "$MIPMAP_XHDPI_DIR" \
     "$MIPMAP_XXHDPI_DIR" "$MIPMAP_XXXHDPI_DIR"
 rm -rf "$TEMP_ROOT_DIR"
-mkdir -p "$TEMP_CLASSES_DIR" "$FLAT_RES_DIR" "$R_PACKAGE_DIR" "$TEMP_BUILD_DATA_DIR" "$AAB_TEMP_DIR"
+mkdir -p "$TEMP_CLASSES_DIR" "$FLAT_RES_DIR" "$R_PACKAGE_DIR" "$TEMP_BUILD_DATA_DIR" "$AAB_TEMP_DIR" \
+    "$KCLIB_WORK_DIR" "$NATIVE_PACKAGE_DIR" "$KCLIB_BRIDGE_DIR"
 
 DENSITY_PAIRS="mdpi:48x48 hdpi:72x72 xhdpi:96x96 xxhdpi:144x144 xxxhdpi:192x192"
 ICON_TEMP_FILE="$RES_DIR/temp_icon_file_base"
@@ -589,53 +678,9 @@ printf '%s\n' "$BUILD_TIMESTAMP" > "$ASSETS_DIR/www.build_timestamp"
 echo "www fingerprint: $WWW_VERSION"
 echo "www build timestamp: $BUILD_TIMESTAMP"
 
-echo "Staging embedded kclib libraries..."
-KCLIB_DIST_DIR="$(cfg kclib_dist_dir)"
-KCLIB_DIST_DIR="${KCLIB_DIST_DIR:-../../kclib/dist}"
-[ -f "$KCLIB_DIST_DIR/manifest.json" ] || { echo "error: kclib dist manifest not found: $KCLIB_DIST_DIR/manifest.json" >&2; exit 1; }
-
-rm -rf "$ASSETS_DIR/kclib"
-mkdir -p "$ASSETS_DIR/kclib"
-KCLIB_TIMESTAMP="$(date -u +%s)"
-KCLIB_ENTRIES=""
-
-# Copies one native library into the APK assets and appends its record to
-# the embedded kclib manifest. Fails hard when the artifact is missing.
-# @param project kclib project directory name (e.g. jni.c).
-# @param binary  Library file name (e.g. libjni.so).
-# @param name    kclib project name without extension (e.g. jni).
-# @param arch    ABI directory name (aarch64 or armv7).
-# @return None.
-add_kclib_entry () {
-    entry_project="$1"
-    entry_binary="$2"
-    entry_name="$3"
-    entry_arch="$4"
-    entry_src="$KCLIB_DIST_DIR/$entry_project/$entry_arch/android/$entry_binary"
-    if [ ! -f "$entry_src" ]; then
-        echo "error: kclib artifact not found: $entry_src" >&2
-        exit 1
-    fi
-    mkdir -p "$ASSETS_DIR/kclib/$entry_arch"
-    cp "$entry_src" "$ASSETS_DIR/kclib/$entry_arch/$entry_binary"
-    entry_size=$(wc -c < "$entry_src" | tr -d ' ')
-    entry_sha=$(sha256 "$entry_src")
-    if [ -n "$KCLIB_ENTRIES" ]; then
-        KCLIB_ENTRIES="$KCLIB_ENTRIES,"
-    fi
-    KCLIB_ENTRIES="$KCLIB_ENTRIES{\"name\":\"$entry_name\",\"binary\":\"$entry_binary\",\"arch\":\"$entry_arch\",\"size_bytes\":$entry_size,\"sha256\":\"$entry_sha\"}"
-}
-
-for KCLIB_ARCH in aarch64 armv7; do
-    add_kclib_entry jni.c libjni.so jni "$KCLIB_ARCH"
-    for DEP in $KCLIB_DEPS; do
-        [ -n "$DEP" ] || continue
-        add_kclib_entry "$DEP.c" "lib$DEP.so" "$DEP" "$KCLIB_ARCH"
-    done
-done
-
-printf '{"timestamp":%s,"libs":[%s]}' "$KCLIB_TIMESTAMP" "$KCLIB_ENTRIES" > "$ASSETS_DIR/kclib/manifest.json"
-echo "embedded kclib manifest: $(find "$ASSETS_DIR/kclib" -mindepth 2 -type f | wc -l) libraries staged"
+echo "Preparing declared kclib dependencies..."
+prepare_kclib_dependencies
+build_project_native
 
 JAVA_TRUSTED_ORIGINS=""
 for ORIGIN in $TRUSTED_ORIGINS; do
@@ -662,19 +707,6 @@ cat << EOF > "$MANIFEST_FILE"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <meta-data android:name="android.max_aspect" android:value="2.4" />
 EOF
-
-if [ -n "$KCLIB_DEPS" ]; then
-    KCLIB_WHITELIST=""
-    for DEP in $KCLIB_DEPS; do
-        if [ -n "$KCLIB_WHITELIST" ]; then
-            KCLIB_WHITELIST="$KCLIB_WHITELIST,"
-        fi
-        KCLIB_WHITELIST="$KCLIB_WHITELIST$DEP"
-    done
-    cat << EOF >> "$MANIFEST_FILE"
-        <meta-data android:name="com.kaisarcode.kclib.allowed_kclibs" android:value="$KCLIB_WHITELIST" />
-EOF
-fi
 
 cat << EOF >> "$MANIFEST_FILE"
         <activity
@@ -760,12 +792,9 @@ import java.text.SimpleDateFormat;
 import java.util.Locale;
 import java.util.TimeZone;
 
-import com.kaisarcode.kclib.KclibBridge;
-
 public class Provisioner {
     private static final String TAG = "Provisioner";
 
-    private static final String KCLIB_MANIFEST_URL = "$KCLIB_MANIFEST_URL";
     private static final String APP_MANIFEST_URL = "$APP_MANIFEST_URL";
     private static final String DEFAULT_START = "$APP_START";
     private static final int CONNECT_TIMEOUT_MS = 15000;
@@ -842,10 +871,7 @@ public class Provisioner {
     // warnings through the listener.
     public static String provision(Context context, ProgressListener listener) {
         File filesDir = context.getFilesDir();
-        File nativeDir = context.getCodeCacheDir();
         File wwwDir = new File(filesDir, "www");
-
-        String arch = resolveArch();
 
         copyEmbeddedWww(context, filesDir, wwwDir);
 
@@ -857,20 +883,14 @@ public class Provisioner {
             appManifest = fetchJsonCached(context, APP_MANIFEST_URL, appChanged);
             start = appManifest.optString("start", DEFAULT_START);
 
-            listener.onStage("Reading kclib manifest...");
-            boolean[] kclibChanged = {false};
-            JSONObject kclibManifest = fetchJsonCached(context, KCLIB_MANIFEST_URL, kclibChanged);
-
-            syncWork(context, appManifest, kclibManifest, nativeDir, filesDir, arch, listener);
+            syncWork(context, appManifest, null, null, filesDir, null, listener);
         } catch (IOException e) {
-            Log.w(TAG, "network unavailable; using local cache and embedded libraries", e);
+            Log.w(TAG, "network unavailable; using local web assets", e);
             String msg = e.getMessage();
             listener.onWarning("Download problem: " + (msg == null ? "network error" : msg)
                     + " (using local cache)");
-            // Native libraries still install from the copies embedded in the
-            // APK; only the server sync is skipped.
             try {
-                syncWork(context, null, null, nativeDir, filesDir, arch, listener);
+                syncWork(context, null, null, null, filesDir, null, listener);
             } catch (IOException e2) {
                 Log.e(TAG, "embedded provisioning failed", e2);
                 String msg2 = e2.getMessage();
@@ -937,17 +957,6 @@ public class Provisioner {
     // whitelist. The whitelist must be pushed after the load; libjni keeps
     // only the first one it receives. Returns true once the bridge is ready.
     public static synchronized boolean prepareNative(Context context) {
-        if (!ensureNative(context)) {
-            return false;
-        }
-        String whitelist = declaredKclibs(context);
-        try {
-            KclibBridge.setWhitelist(whitelist);
-            Log.i(TAG, "kclib whitelist applied: " + (whitelist == null ? "(all allowed)" : whitelist));
-        } catch (Throwable t) {
-            Log.w(TAG, "setWhitelist failed", t);
-            return false;
-        }
         return true;
     }
 
@@ -1029,6 +1038,12 @@ public class Provisioner {
             } catch (Exception ignored) {}
             long serverTs = appManifest.optLong("timestamp", 0);
 
+            if (embeddedBuildTimestamp > 0 && serverTs <= embeddedBuildTimestamp) {
+                listener.onStage("Done");
+                Log.i(TAG, "remote web manifest is not newer than embedded assets");
+                return;
+            }
+
             JSONArray assets = appManifest.optJSONArray("assets");
             if (assets != null) {
                 for (int i = 0; i < assets.length(); i++) {
@@ -1043,11 +1058,6 @@ public class Provisioner {
                     File target = new File(filesDir, path);
                     String sha = a.optString("sha256");
                     if (isUpToDate(target, sha)) {
-                        continue;
-                    }
-                    if (serverTs > 0 && embeddedBuildTimestamp > 0 && serverTs < embeddedBuildTimestamp
-                            && target.isFile()) {
-                        Log.i(TAG, "asset up to date (embedded newer): " + path);
                         continue;
                     }
                     target.getParentFile().mkdirs();
@@ -1073,7 +1083,6 @@ public class Provisioner {
         if (appManifest != null) {
             deleteAbsent(new File(filesDir, "www"), collectExpected(appManifest));
             writeManifestCache(context, APP_MANIFEST_URL, appManifest);
-            writeManifestCache(context, KCLIB_MANIFEST_URL, kclibManifest);
         }
         listener.onStage("Done");
         Log.i(TAG, "provisioning complete");
@@ -1097,7 +1106,7 @@ public class Provisioner {
             JSONObject rec = findKclibRecord(kclibManifest, project, binary, "android", arch);
             sha = rec.optString("sha256");
             size = rec.optLong("size_bytes", -1);
-            downloadUrl = url(KCLIB_MANIFEST_URL, rec.optString("path"));
+            downloadUrl = "";
         }
         File target = new File(nativeDir, binary);
         if (isUpToDate(target, sha)) {
@@ -2007,8 +2016,6 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 $FULLSCREEN_IMPORTS
 
-import com.kaisarcode.kclib.KclibBridge;
-
 public class MainActivity extends Activity {
     private static final String TAG = "MainActivity";
     private static final String JS_INTERFACE_NAME = "AndroidBridge";
@@ -2061,8 +2068,7 @@ $FULLSCREEN_SETUP
             }
         });
         webView.addJavascriptInterface(jsBridge, JS_INTERFACE_NAME);
-        webView.addJavascriptInterface(new KclibBridge(), "KclibBridge");
-        webView.addJavascriptInterface(new NativeBridge(this, webView, jsBridge), "NativeBridge");
+${NATIVE_BRIDGE_REGISTRATION}
 
         webView.loadDataWithBaseURL(splashBaseUrl(), loadSplashPage(), "text/html", "UTF-8", null);
 
@@ -2114,9 +2120,6 @@ $FULLSCREEN_SETUP
 
                 try {
                     result[0] = Provisioner.provision(activity, listener);
-                    if (result[0] != null) {
-                        Provisioner.prepareNative(activity);
-                    }
                 } catch (Exception e) {
                     result[1] = escapeHtml(String.valueOf(e.getMessage()));
                     Log.e(TAG, "provision failed", e);
@@ -2237,6 +2240,9 @@ $FULLSCREEN_SETUP
 EOF
 
 echo "Compiling Resources with AAPT2..."
+if [ -f "$NATIVE_BRIDGE_SOURCE" ]; then
+    cp "$NATIVE_BRIDGE_SOURCE" "$NATIVE_BRIDGE_FILE"
+fi
 "$AAPT2" compile --dir "$RES_DIR" -o "$FLAT_RES_DIR/res.zip" || { echo "Error: AAPT2 Compile failed."; exit 1; }
 
 echo "Linking Resources, Manifest, and Generating R.java..."
@@ -2251,16 +2257,26 @@ echo "Linking Resources, Manifest, and Generating R.java..."
     --auto-add-overlay || { echo "Error: AAPT2 Link failed."; exit 1; }
 
 echo "Compiling Source Code..."
-javac -g:none --release 11 \
-    -classpath "$ANDROID_JAR" \
-    -d "$TEMP_CLASSES_DIR" \
-    "$R_PACKAGE_DIR/R.java" \
-    "$WEBVIEW_CLIENT_FILE" \
-    "$MAIN_ACTIVITY_FILE" \
-    "$JS_INTERFACE_FILE" \
-    "$KCLIB_BRIDGE_FILE" \
-    "$NATIVE_BRIDGE_FILE" \
-    "$PROVISIONER_FILE" || { echo "Error: JAVAC failed."; exit 1; }
+if [ -n "$NATIVE_BRIDGE_JAVA_SOURCE" ]; then
+    javac -g:none --release 11 \
+        -classpath "$ANDROID_JAR" \
+        -d "$TEMP_CLASSES_DIR" \
+        "$R_PACKAGE_DIR/R.java" \
+        "$WEBVIEW_CLIENT_FILE" \
+        "$MAIN_ACTIVITY_FILE" \
+        "$JS_INTERFACE_FILE" \
+        "$NATIVE_BRIDGE_JAVA_SOURCE" \
+        "$PROVISIONER_FILE" || { echo "Error: JAVAC failed."; exit 1; }
+else
+    javac -g:none --release 11 \
+        -classpath "$ANDROID_JAR" \
+        -d "$TEMP_CLASSES_DIR" \
+        "$R_PACKAGE_DIR/R.java" \
+        "$WEBVIEW_CLIENT_FILE" \
+        "$MAIN_ACTIVITY_FILE" \
+        "$JS_INTERFACE_FILE" \
+        "$PROVISIONER_FILE" || { echo "Error: JAVAC failed."; exit 1; }
+fi
 
 echo "Packaging .class files into temporary JAR..."
 CURRENT_DIR=$(pwd)
