@@ -638,11 +638,11 @@ PHASE 0 - BASELINE INSPECTION
 
 PHASE 1 - DEFINE CANONICAL PROJECT NATIVE INPUT
 
-[ ] Choose and document in code comments the single canonical project native directory.
-[ ] Prefer projects/PROJECT/native/ unless current project structure gives a concrete reason otherwise.
-[ ] Define exactly which project-native source files build.sh recognizes.
-[ ] Ensure projects with no native integration continue to build.
-[ ] Do not add alternative source layouts.
+[x] Choose and document in code comments the single canonical project native directory.
+[x] Prefer projects/PROJECT/native/ unless current project structure gives a concrete reason otherwise.
+[x] Define exactly which project-native source files build.sh recognizes.
+[x] Ensure projects with no native integration continue to build.
+[x] Do not add alternative source layouts.
 
 
 PHASE 2 - KCLIB BUILD DEPENDENCY PREPARATION
@@ -664,39 +664,39 @@ PHASE 2 - KCLIB BUILD DEPENDENCY PREPARATION
 
 PHASE 3 - REMOVE GENERIC JNI RUNTIME
 
-[ ] Stop staging jni.c.
-[ ] Stop staging libjni.so.
-[ ] Remove KclibBridge.java generation.
-[ ] Remove KCLIB_BRIDGE_PACKAGE variables.
-[ ] Remove KCLIB_BRIDGE_DIR variables.
-[ ] Remove KCLIB_BRIDGE_FILE variables.
-[ ] Remove generic setWhitelist JNI calls.
-[ ] Remove generic run JNI calls.
-[ ] Remove all kc_<name>_run assumptions.
-[ ] Remove AndroidManifest allowed_kclibs metadata generation.
-[ ] Remove generic native-load state associated with libjni.so.
-[ ] Confirm no generated Java code still references KclibBridge.
+[x] Stop staging jni.c.
+[x] Stop staging libjni.so.
+[x] Remove KclibBridge.java generation.
+[x] Remove KCLIB_BRIDGE_PACKAGE variables.
+[x] Remove KCLIB_BRIDGE_DIR variables.
+[x] Remove KCLIB_BRIDGE_FILE variables.
+[x] Remove generic setWhitelist JNI calls.
+[x] Remove generic run JNI calls.
+[x] Remove all kc_<name>_run assumptions.
+[x] Remove AndroidManifest allowed_kclibs metadata generation.
+[x] Remove generic native-load state associated with libjni.so.
+[x] Confirm no generated Java code still references KclibBridge.
 
 
 PHASE 4 - REMOVE NATIVE LIBRARY RUNTIME PROVISIONING
 
-[ ] Remove embedded assets/kclib generation.
-[ ] Remove embedded kclib manifest generation.
-[ ] Remove runtime kclib manifest fetching when used only for .so updates.
-[ ] Remove nativePending().
-[ ] Remove findEmbeddedRecord().
-[ ] Remove findKclibRecord().
-[ ] Remove readEmbeddedKclibManifest().
-[ ] Remove declaredKclibs() if no longer used elsewhere.
-[ ] Remove declaredKclibList() if no longer used elsewhere.
-[ ] Remove ensureNative().
-[ ] Remove prepareNative().
-[ ] Remove nativeLoadError().
-[ ] Remove native .so copy-to-codeCacheDir behavior.
-[ ] Remove native .so runtime chmod behavior.
-[ ] Remove native .so update comparison by timestamps.
-[ ] Preserve web asset provisioning behavior.
-[ ] Re-read Provisioner after cleanup and remove dead imports/state only when actually unused.
+[x] Remove embedded assets/kclib generation.
+[x] Remove embedded kclib manifest generation.
+[x] Remove runtime kclib manifest fetching when used only for .so updates.
+[x] Remove nativePending().
+[x] Remove findEmbeddedRecord().
+[x] Remove findKclibRecord().
+[x] Remove readEmbeddedKclibManifest().
+[x] Remove declaredKclibs() if no longer used elsewhere.
+[x] Remove declaredKclibList() if no longer used elsewhere.
+[x] Remove ensureNative().
+[x] Remove prepareNative().
+[x] Remove nativeLoadError().
+[x] Remove native .so copy-to-codeCacheDir behavior.
+[x] Remove native .so runtime chmod behavior.
+[x] Remove native .so update comparison by timestamps.
+[x] Preserve web asset provisioning behavior.
+[x] Re-read Provisioner after cleanup and remove dead imports/state only when actually unused.
 
 
 PHASE 5 - PACKAGE NATIVE LIBRARIES AS APK/AAB NATIVE LIBS
@@ -722,30 +722,30 @@ PHASE 6 - PROJECT-SPECIFIC JNI COMPILATION
 [x] Link against declared kclib Android libraries when required by the project code.
 [x] Produce one project JNI shared library per ABI when project JNI exists.
 [x] Package the project JNI shared library correctly.
-[ ] Do not create project JNI artifacts for projects that do not provide native code.
-[ ] Do not introduce a generic JNI API.
+[x] Do not create project JNI artifacts for projects that do not provide native code.
+[x] Do not introduce a generic JNI API.
 
 
 PHASE 7 - ANDROIDBRIDGE CLEANUP
 
-[ ] Preserve AndroidBridge as common kcapk functionality.
-[ ] Audit its current methods.
-[ ] Remove only stale kclib-specific behavior if any exists.
-[ ] Preserve trusted-origin enforcement.
-[ ] Preserve useful Android-common capabilities.
-[ ] Do not add project-specific APIs to AndroidBridge.
+[x] Preserve AndroidBridge as common kcapk functionality.
+[x] Audit its current methods.
+[x] Remove only stale kclib-specific behavior if any exists.
+[x] Preserve trusted-origin enforcement.
+[x] Preserve useful Android-common capabilities.
+[x] Do not add project-specific APIs to AndroidBridge.
 
 
 PHASE 8 - NATIVEBRIDGE REDEFINITION
 
-[ ] Preserve NativeBridge as a separate concept from AndroidBridge.
-[ ] Remove runKclib-specific implementation.
-[ ] Identify reusable async request/response plumbing, if any.
-[ ] Keep common transport plumbing only when it remains useful independently of kclib.
-[ ] Make project-specific NativeBridge behavior come from the canonical project integration.
-[ ] Ensure NativeBridge does not automatically expose declared kclibs.
-[ ] Ensure projects may define arbitrary application-specific native APIs.
-[ ] Ensure a project can choose not to expose NativeBridge functionality at all.
+[x] Preserve NativeBridge as a separate concept from AndroidBridge.
+[x] Remove runKclib-specific implementation.
+[x] Identify reusable async request/response plumbing, if any.
+[x] Keep common transport plumbing only when it remains useful independently of kclib.
+[x] Make project-specific NativeBridge behavior come from the canonical project integration.
+[x] Ensure NativeBridge does not automatically expose declared kclibs.
+[x] Ensure projects may define arbitrary application-specific native APIs.
+[x] Ensure a project can choose not to expose NativeBridge functionality at all.
 
 
 PHASE 9 - DEMO MIGRATION USING REDP2P
@@ -764,16 +764,16 @@ PHASE 9 - DEMO MIGRATION USING REDP2P
 
 PHASE 10 - WEB PROVISIONER REGRESSION CHECK
 
-[ ] Confirm embedded www assets still install on first run.
-[ ] Confirm www fingerprint behavior still works.
-[ ] Confirm remote web manifest checking still works.
-[ ] Confirm updated web assets still download.
-[ ] Confirm SHA-256 verification still works.
-[ ] Confirm offline fallback still works.
-[ ] Confirm splash status reporting still works.
-[ ] Confirm splash progress reporting still works.
-[ ] Confirm splash warning reporting still works.
-[ ] Confirm no native dependency is downloaded by Provisioner.
+[x] Confirm embedded www assets still install on first run.
+[x] Confirm www fingerprint behavior still works.
+[x] Confirm remote web manifest checking still works.
+[x] Confirm updated web assets still download.
+[x] Confirm SHA-256 verification still works.
+[x] Confirm offline fallback still works.
+[x] Confirm splash status reporting still works.
+[x] Confirm splash progress reporting still works.
+[x] Confirm splash warning reporting still works.
+[x] Confirm no native dependency is downloaded by Provisioner.
 
 
 PHASE 11 - BUILD VERIFICATION
@@ -800,51 +800,51 @@ PHASE 12 - ANDROID RUNTIME VERIFICATION
 [x] Install demo APK on a supported Android device/emulator.
 [x] Confirm application starts.
 [x] Confirm WebView loads embedded/current assets.
-[ ] Confirm AndroidBridge still works.
-[ ] Confirm trusted-origin restrictions still work.
+[x] Confirm AndroidBridge still works.
+[x] Confirm trusted-origin restrictions still work.
 [x] Confirm project NativeBridge loads.
 [x] Confirm project JNI loads.
 [x] Confirm libredp2p.so resolves correctly.
 [x] Exercise the specific redp2p API exposed by demo.
-[ ] Confirm no generic runner path exists.
-[ ] Confirm no runtime native-library updater is used.
-[ ] Confirm web asset updates still work independently.
+[x] Confirm no generic runner path exists.
+[x] Confirm no runtime native-library updater is used.
+[x] Confirm web asset updates still work independently.
 
 
 PHASE 13 - CLEAN DEAD BUILD CODE
 
-[ ] Search build.sh for KCLIB_MANIFEST_URL.
-[ ] Keep it only if still used for a real remaining purpose.
-[ ] Search build.sh for libjni.
-[ ] Require zero active references.
-[ ] Search generated Java templates for KclibBridge.
-[ ] Require zero active references.
-[ ] Search for runKclib.
-[ ] Require zero active references.
-[ ] Search for allowed_kclibs.
-[ ] Require zero active references.
-[ ] Search for assets/kclib.
-[ ] Require zero active references.
-[ ] Remove imports made unused by the refactor.
-[ ] Remove variables made unused by the refactor.
-[ ] Do not perform unrelated cleanup.
+[x] Search build.sh for KCLIB_MANIFEST_URL.
+[x] Keep it only if still used for a real remaining purpose.
+[x] Search build.sh for libjni.
+[x] Require zero active references.
+[x] Search generated Java templates for KclibBridge.
+[x] Require zero active references.
+[x] Search for runKclib.
+[x] Require zero active references.
+[x] Search for allowed_kclibs.
+[x] Require zero active references.
+[x] Search for assets/kclib.
+[x] Require zero active references.
+[x] Remove imports made unused by the refactor.
+[x] Remove variables made unused by the refactor.
+[x] Do not perform unrelated cleanup.
 
 
 PHASE 14 - DOCUMENT EFFECTIVE DESIGN
 
-[ ] Update README.md only after implementation and runtime behavior are known.
-[ ] Update AGENTS.md to describe the new ownership boundaries.
-[ ] Document manifest.json:kclib as build-time dependency selection.
-[ ] Document canonical kclib dist resolution.
-[ ] Document source.zip header extraction.
-[ ] Document project-native integration location.
-[ ] Document AndroidBridge versus NativeBridge.
-[ ] Document that native dependencies ship with the APK.
-[ ] Document that changing an incompatible native API requires an app rebuild.
-[ ] Remove documentation about generic libjni.so.
-[ ] Remove documentation about runKclib.
-[ ] Remove documentation about runtime .so updating.
-[ ] Do not document speculative custom dependency machinery.
+[x] Update README.md only after implementation and runtime behavior are known.
+[x] Update AGENTS.md to describe the new ownership boundaries.
+[x] Document manifest.json:kclib as build-time dependency selection.
+[x] Document canonical kclib dist resolution.
+[x] Document source.zip header extraction.
+[x] Document project-native integration location.
+[x] Document AndroidBridge versus NativeBridge.
+[x] Document that native dependencies ship with the APK.
+[x] Document that changing an incompatible native API requires an app rebuild.
+[x] Remove documentation about generic libjni.so.
+[x] Remove documentation about runKclib.
+[x] Remove documentation about runtime .so updating.
+[x] Do not document speculative custom dependency machinery.
 
 
 NON-GOALS

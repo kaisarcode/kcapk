@@ -247,8 +247,6 @@ JS_INTERFACE_FILE="$SRC_DIR/JSBridge.java"
 WEBVIEW_CLIENT_FILE="$SRC_DIR/TrustedWebViewClient.java"
 PROVISIONER_FILE="$SRC_DIR/Provisioner.java"
 NATIVE_BRIDGE_FILE="$SRC_DIR/NativeBridge.java"
-KCLIB_BRIDGE_DIR="$TEMP_ROOT_DIR/obsolete_java"
-KCLIB_BRIDGE_FILE="$KCLIB_BRIDGE_DIR/KclibBridge.java"
 
 NATIVE_BRIDGE_REGISTRATION=""
 NATIVE_BRIDGE_JAVA_SOURCE=""
@@ -458,10 +456,14 @@ build_aab () {
     if [ -d "$NATIVE_PACKAGE_DIR/lib" ]; then
         cp -R "$NATIVE_PACKAGE_DIR/lib" "$FINAL_MODULE_DIR/lib"
     fi
-    if [ -d "$FINAL_MODULE_DIR/assets" ]; then
+    if [ -d "$FINAL_MODULE_DIR/assets" ] && [ -d "$FINAL_MODULE_DIR/lib" ]; then
         (cd "$FINAL_MODULE_DIR" && zip -r -q "$ABS_BASE_MODULE_ZIP" manifest res dex resources.pb assets lib) || { echo "Error: ZIP tool failed to re-package module."; exit 1; }
-    else
+    elif [ -d "$FINAL_MODULE_DIR/assets" ]; then
+        (cd "$FINAL_MODULE_DIR" && zip -r -q "$ABS_BASE_MODULE_ZIP" manifest res dex resources.pb assets) || { echo "Error: ZIP tool failed to re-package module."; exit 1; }
+    elif [ -d "$FINAL_MODULE_DIR/lib" ]; then
         (cd "$FINAL_MODULE_DIR" && zip -r -q "$ABS_BASE_MODULE_ZIP" manifest res dex resources.pb lib) || { echo "Error: ZIP tool failed to re-package module."; exit 1; }
+    else
+        (cd "$FINAL_MODULE_DIR" && zip -r -q "$ABS_BASE_MODULE_ZIP" manifest res dex resources.pb) || { echo "Error: ZIP tool failed to re-package module."; exit 1; }
     fi
 
     java -jar "$BUNDLETOOL_JAR" build-bundle \
@@ -606,7 +608,7 @@ mkdir -p "$SRC_DIR" "$LAYOUT_DIR" "$VALUES_DIR" "$OUTPUT_DIR" \
     "$MIPMAP_XXHDPI_DIR" "$MIPMAP_XXXHDPI_DIR"
 rm -rf "$TEMP_ROOT_DIR"
 mkdir -p "$TEMP_CLASSES_DIR" "$FLAT_RES_DIR" "$R_PACKAGE_DIR" "$TEMP_BUILD_DATA_DIR" "$AAB_TEMP_DIR" \
-    "$KCLIB_WORK_DIR" "$NATIVE_PACKAGE_DIR" "$KCLIB_BRIDGE_DIR"
+    "$KCLIB_WORK_DIR" "$NATIVE_PACKAGE_DIR"
 
 DENSITY_PAIRS="mdpi:48x48 hdpi:72x72 xhdpi:96x96 xxhdpi:144x144 xxxhdpi:192x192"
 ICON_TEMP_FILE="$RES_DIR/temp_icon_file_base"
@@ -762,10 +764,7 @@ cat << EOF > "$PROVISIONER_FILE"
 package $PACKAGE_NAME;
 
 import android.content.Context;
-import android.content.pm.ApplicationInfo;
-import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
-import android.os.Build;
 import android.util.Log;
 
 import org.json.JSONArray;
@@ -783,8 +782,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.Date;
@@ -800,9 +799,6 @@ public class Provisioner {
     private static final int CONNECT_TIMEOUT_MS = 15000;
     private static final int READ_TIMEOUT_MS = 30000;
 
-    private static boolean nativeLoaded = false;
-    private static String nativeLoadError = null;
-
     // Receives provisioning progress and warnings from the background thread.
     public interface ProgressListener {
         void onStage(String text);
@@ -812,25 +808,20 @@ public class Provisioner {
         void onWarning(String text);
     }
 
-    // One file that needs installing during this provisioning run. Exactly
-    // one of url (server download) and assetPath (APK-embedded copy) is set.
+    // One web asset that needs downloading during this provisioning run.
     private static class Pending {
         final String label;
         final String url;
-        final String assetPath;
         final long size;
-        final boolean isKclib;
         final String sha;
         final File target;
         final File tmp;
 
-        Pending(String label, String url, String assetPath, long size, boolean isKclib, String sha,
+        Pending(String label, String url, long size, String sha,
                 File target, File tmp) {
             this.label = label;
             this.url = url;
-            this.assetPath = assetPath;
             this.size = size;
-            this.isKclib = isKclib;
             this.sha = sha;
             this.target = target;
             this.tmp = tmp;
@@ -883,14 +874,14 @@ public class Provisioner {
             appManifest = fetchJsonCached(context, APP_MANIFEST_URL, appChanged);
             start = appManifest.optString("start", DEFAULT_START);
 
-            syncWork(context, appManifest, null, null, filesDir, null, listener);
+            syncWork(context, appManifest, filesDir, listener);
         } catch (IOException e) {
             Log.w(TAG, "network unavailable; using local web assets", e);
             String msg = e.getMessage();
             listener.onWarning("Download problem: " + (msg == null ? "network error" : msg)
                     + " (using local cache)");
             try {
-                syncWork(context, null, null, null, filesDir, null, listener);
+                syncWork(context, null, filesDir, listener);
             } catch (IOException e2) {
                 Log.e(TAG, "embedded provisioning failed", e2);
                 String msg2 = e2.getMessage();
@@ -906,93 +897,6 @@ public class Provisioner {
         return uri;
     }
 
-    // Loads libjni.so from codeCacheDir on first use so that NativeBridge can
-    // dispatch runner payloads in-process. Returns true once the bridge is
-    // available; the failure reason is available through nativeLoadError().
-    public static synchronized boolean ensureNative(Context context) {
-        if (nativeLoaded) {
-            return true;
-        }
-        File lib = new File(context.getCodeCacheDir(), "libjni.so");
-        if (!lib.isFile()) {
-            for (int i = 0; i < 20; i++) {
-                try { Thread.sleep(250); } catch (InterruptedException ignored) {}
-                if (lib.isFile()) break;
-            }
-        }
-        if (!lib.isFile()) {
-            nativeLoadError = "libjni.so not provisioned";
-            return false;
-        }
-        try {
-            System.load(lib.getAbsolutePath());
-            nativeLoaded = true;
-            nativeLoadError = null;
-            return true;
-        } catch (Throwable t) {
-            nativeLoadError = "load libjni.so: " + String.valueOf(t.getMessage());
-            return false;
-        }
-    }
-
-    // Reads the kclib whitelist declared by this app in its own
-    // AndroidManifest.xml meta-data (com.kaisarcode.kclib.allowed_kclibs).
-    // Returns null when the app declares no whitelist, which means every
-    // kclib module is allowed.
-    private static String declaredKclibs(Context context) {
-        try {
-            ApplicationInfo ai = context.getPackageManager().getApplicationInfo(
-                    context.getPackageName(), PackageManager.GET_META_DATA);
-            if (ai.metaData == null) {
-                return null;
-            }
-            return ai.metaData.getString("com.kaisarcode.kclib.allowed_kclibs");
-        } catch (Exception e) {
-            Log.w(TAG, "cannot read kclib meta-data", e);
-            return null;
-        }
-    }
-
-    // Loads libjni.so ahead of first use and applies the manifest-declared
-    // whitelist. The whitelist must be pushed after the load; libjni keeps
-    // only the first one it receives. Returns true once the bridge is ready.
-    public static synchronized boolean prepareNative(Context context) {
-        return true;
-    }
-
-    public static String nativeLoadError() {
-        return nativeLoadError != null ? nativeLoadError : "native bridge unavailable";
-    }
-
-    private static String resolveArch() {
-        for (String abi : Build.SUPPORTED_ABIS) {
-            if ("arm64-v8a".equals(abi)) {
-                return "aarch64";
-            }
-            if ("armeabi-v7a".equals(abi)) {
-                return "armv7";
-            }
-        }
-        String primary = Build.SUPPORTED_ABIS.length > 0 ? Build.SUPPORTED_ABIS[0] : "unknown";
-        throw new IllegalStateException("unsupported ABI: " + primary);
-    }
-
-    // Splits the comma-separated whitelist declaration into module names.
-    private static List<String> declaredKclibList(Context context) {
-        List<String> deps = new ArrayList<String>();
-        String raw = declaredKclibs(context);
-        if (raw == null || raw.isEmpty()) {
-            return deps;
-        }
-        for (String part : raw.split(",")) {
-            String name = part.trim();
-            if (!name.isEmpty()) {
-                deps.add(name);
-            }
-        }
-        return deps;
-    }
-
     // Plans and installs every file whose installed copy does not match the
     // winning source record, kclib native libraries first, then www assets.
     // Each artifact exists both embedded in the APK and on the server; the
@@ -1000,33 +904,9 @@ public class Provisioner {
     // and also wins when the server is unreachable or carries no timestamp).
     // Existing files are kept only when their SHA-256 matches the winning
     // record.
-    private static void syncWork(Context context, JSONObject appManifest, JSONObject kclibManifest,
-            File nativeDir, File filesDir, String arch, ProgressListener listener) throws IOException {
+    private static void syncWork(Context context, JSONObject appManifest, File filesDir, ProgressListener listener)
+            throws IOException {
         List<Pending> pending = new ArrayList<Pending>();
-
-        List<String> deps = declaredKclibList(context);
-        if (!deps.isEmpty()) {
-            JSONObject embedded = readEmbeddedKclibManifest(context);
-            long embeddedTs = embedded == null ? 0 : embedded.optLong("timestamp", 0);
-            long serverTs = kclibManifest == null ? 0 : kclibManifest.optLong("timestamp", 0);
-            boolean useEmbedded = embedded != null && embeddedTs >= serverTs;
-            if (!useEmbedded && kclibManifest == null) {
-                throw new IOException("no embedded kclib libraries in APK and no server manifest");
-            }
-
-            Pending p = nativePending(embedded, kclibManifest, useEmbedded,
-                    "jni.c", "libjni.so", "jni", arch, nativeDir);
-            if (p != null) {
-                pending.add(p);
-            }
-            for (String dep : deps) {
-                p = nativePending(embedded, kclibManifest, useEmbedded,
-                        dep + ".c", "lib" + dep + ".so", dep, arch, nativeDir);
-                if (p != null) {
-                    pending.add(p);
-                }
-            }
-        }
 
         if (appManifest != null) {
             long embeddedBuildTimestamp = 0;
@@ -1062,8 +942,8 @@ public class Provisioner {
                     }
                     target.getParentFile().mkdirs();
                     Log.i(TAG, "asset to install: " + path);
-                    pending.add(new Pending(path, url(APP_MANIFEST_URL, path), null,
-                            a.optLong("size_bytes", -1), false, sha, target,
+                    pending.add(new Pending(path, url(APP_MANIFEST_URL, path),
+                            a.optLong("size_bytes", -1), sha, target,
                             new File(target.getParentFile(), target.getName() + ".tmp")));
                 }
             }
@@ -1088,94 +968,17 @@ public class Provisioner {
         Log.i(TAG, "provisioning complete");
     }
 
-    // Builds one install task for a native library taken from the winning
-    // source (APK-embedded copy or server). Returns null when the installed
-    // copy already matches the record.
-    private static Pending nativePending(JSONObject embedded, JSONObject kclibManifest, boolean useEmbedded,
-            String project, String binary, String name, String arch, File nativeDir) throws IOException {
-        String sha;
-        long size;
-        String assetPath = null;
-        String downloadUrl = null;
-        if (useEmbedded) {
-            JSONObject rec = findEmbeddedRecord(embedded, name, binary, arch);
-            sha = rec.optString("sha256");
-            size = rec.optLong("size_bytes", -1);
-            assetPath = "kclib/" + arch + "/" + binary;
-        } else {
-            JSONObject rec = findKclibRecord(kclibManifest, project, binary, "android", arch);
-            sha = rec.optString("sha256");
-            size = rec.optLong("size_bytes", -1);
-            downloadUrl = "";
-        }
-        File target = new File(nativeDir, binary);
-        if (isUpToDate(target, sha)) {
-            Log.i(TAG, binary + ": up to date");
-            return null;
-        }
-        Log.i(TAG, binary + ": installing");
-        return new Pending(binary + " (" + arch + ")", downloadUrl, assetPath, size, true, sha,
-                target, new File(nativeDir, binary + ".tmp"));
-    }
-
-    // Loads the kclib manifest embedded in the APK at build time, or null
-    // when this APK carries no embedded native libraries.
-    private static JSONObject readEmbeddedKclibManifest(Context context) {
-        InputStream is = null;
-        try {
-            is = context.getAssets().open("kclib/manifest.json");
-            return new JSONObject(readStreamToString(is));
-        } catch (Exception e) {
-            Log.w(TAG, "no embedded kclib manifest", e);
-            return null;
-        } finally {
-            close(is);
-        }
-    }
-
-    // Finds one library record in the embedded kclib manifest.
-    private static JSONObject findEmbeddedRecord(JSONObject embedded, String name, String binary,
-            String arch) throws IOException {
-        JSONArray libs = embedded.optJSONArray("libs");
-        if (libs != null) {
-            for (int i = 0; i < libs.length(); i++) {
-                JSONObject v = libs.optJSONObject(i);
-                if (v != null && name.equals(v.optString("name"))
-                        && binary.equals(v.optString("binary"))
-                        && arch.equals(v.optString("arch"))) {
-                    return v;
-                }
-            }
-        }
-        throw new IOException("no embedded kclib record for " + binary + " (" + arch + ")");
-    }
-
     // Installs every pending file in order, reporting progress. Embedded
     // copies stream from the APK assets; the rest download from the server.
     private static void syncPending(Context context, List<Pending> pending, Progress progress) throws IOException {
         for (Pending p : pending) {
-            if (p.assetPath != null) {
-                progress.stage("Installing " + p.label + "...");
-                copyAssetToFile(context, p.assetPath, p.tmp, p.size, p.label, progress);
-            } else {
-                progress.stage("Downloading " + p.label + "...");
-                downloadToFile(p.url, p.tmp, p.size, p.label, progress);
-            }
+            progress.stage("Downloading " + p.label + "...");
+            downloadToFile(p.url, p.tmp, p.size, p.label, progress);
             verifyOrThrow(p.tmp, p.size, p.sha, p.label);
-            if (p.isKclib) {
-                if (!p.tmp.renameTo(p.target)) {
-                    throw new IOException("cannot install " + p.label);
-                }
-                if (!p.target.setExecutable(true, false)) {
-                    throw new IOException("cannot chmod " + p.label);
-                }
-                Log.i(TAG, p.label + ": installed");
-            } else {
-                if (!p.tmp.renameTo(p.target)) {
-                    copyReplace(p.tmp, p.target);
-                }
-                Log.i(TAG, "asset installed: " + p.label);
+            if (!p.tmp.renameTo(p.target)) {
+                copyReplace(p.tmp, p.target);
             }
+            Log.i(TAG, "asset installed: " + p.label);
         }
     }
 
@@ -1196,29 +999,6 @@ public class Provisioner {
             }
         }
         return expected;
-    }
-
-    private static JSONObject findKclibRecord(JSONObject kclibManifest, String project, String binary,
-            String platform, String arch) throws IOException {
-        JSONObject projects = kclibManifest.optJSONObject("projects");
-        if (projects == null) {
-            throw new IOException("kclib manifest has no projects");
-        }
-        JSONArray variants = projects.optJSONArray(project);
-        if (variants == null) {
-            throw new IOException("kclib project not in manifest: " + project);
-        }
-        for (int i = 0; i < variants.length(); i++) {
-            JSONObject v = variants.optJSONObject(i);
-            if (v != null
-                    && platform.equals(v.optString("platform"))
-                    && arch.equals(v.optString("arch"))
-                    && binary.equals(v.optString("binary"))) {
-                return v;
-            }
-        }
-        throw new IOException("no record for " + project + "/" + binary
-                + " (" + platform + "/" + arch + ")");
     }
 
     // Deletes local files under filesDir/www that are not listed in the manifest.
@@ -1668,198 +1448,6 @@ public class TrustedWebViewClient extends WebViewClient {
     }
 }
 EOF
-
-cat << EOF > "$KCLIB_BRIDGE_FILE"
-package $KCLIB_BRIDGE_PACKAGE;
-
-import java.io.File;
-
-public final class KclibBridge {
-    private static boolean loaded = false;
-
-    public KclibBridge() {
-    }
-
-    public static synchronized boolean ensureLoaded(String libPath) {
-        if (loaded) {
-            return true;
-        }
-        File lib = new File(libPath);
-        if (!lib.isFile()) {
-            return false;
-        }
-        try {
-            System.load(lib.getAbsolutePath());
-            loaded = true;
-            return true;
-        } catch (Throwable t) {
-            return false;
-        }
-    }
-
-    public static native String run(String payloadJson);
-    public static native void setWhitelist(String whitelist);
-}
-EOF
-
-cat << NEOF > "$NATIVE_BRIDGE_FILE"
-package $PACKAGE_NAME;
-
-import android.content.Context;
-import android.os.Handler;
-import android.os.Looper;
-import android.util.Log;
-import android.webkit.JavascriptInterface;
-import android.webkit.WebView;
-
-import org.json.JSONObject;
-
-import com.kaisarcode.kclib.KclibBridge;
-
-public class NativeBridge {
-    private static final String TAG = "NativeBridge";
-    private final WebView webView;
-    private final Context context;
-    private final JSBridge jsBridge;
-    private final Handler mainHandler;
-
-    public NativeBridge(Context context, WebView webView, JSBridge jsBridge) {
-        this.context = context;
-        this.webView = webView;
-        this.jsBridge = jsBridge;
-        this.mainHandler = new Handler(Looper.getMainLooper());
-    }
-
-    @JavascriptInterface
-    public void setStatus(String s) {
-    }
-
-    @JavascriptInterface
-    public void setProgress(long done, long total, String current, long curDone, long curTotal) {
-    }
-
-    @JavascriptInterface
-    public void setWarning(String w) {
-    }
-
-    // Accepts one invoke request and returns immediately. The kclib call runs
-    // on a dedicated worker thread so that blocking native executions never
-    // freeze the page; the response is posted back through _receive().
-    @JavascriptInterface
-    public void _invoke(final String method, final String paramsJson) {
-        final Thread worker = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                execute(method, paramsJson);
-            }
-        }, "NativeBridge-" + (method == null ? "null" : method));
-        worker.start();
-        Log.d(TAG, "invoke queued: " + method);
-    }
-
-    // Runs one bridge call to completion on the worker thread. Blocking here
-    // is by design: this thread exists only for this call. Every outcome,
-    // including thrown throwables, is delivered as a structured response so
-    // the JavaScript Promise always settles.
-    private void execute(String method, String paramsJson) {
-        String id = "";
-        String rawPayload = paramsJson;
-        try {
-            JSONObject msg = new JSONObject(paramsJson);
-            id = msg.optString("id", "");
-            if (msg.has("params")) {
-                Object p = msg.get("params");
-                rawPayload = p.toString();
-            }
-        } catch (Exception ignored) {
-        }
-
-        // Gate on page origin after the id is parsed: an untrusted caller
-        // still gets a structured response, so its Promise settles visibly
-        // and no payload ever reaches kclib.
-        if (!jsBridge.canUseBridge()) {
-            Log.w(TAG, "invoke rejected from untrusted origin: " + method);
-            deliver(id, errorResponse("UNTRUSTED_ORIGIN",
-                    "NativeBridge is not available from this page origin"));
-            return;
-        }
-
-        String response;
-        try {
-            response = runKclib(rawPayload);
-        } catch (Throwable t) {
-            Log.e(TAG, "invoke failed: " + method, t);
-            response = errorResponse("KCLIB_FAILED", String.valueOf(t.getMessage()));
-        }
-        deliver(id, response);
-    }
-
-    // Executes one runner payload in-process through libjni.so.
-    private String runKclib(String rawPayload) throws Exception {
-        if (!Provisioner.ensureNative(context)) {
-            return errorResponse("KCLIB_FAILED", Provisioner.nativeLoadError());
-        }
-
-        String result = KclibBridge.run(rawPayload);
-
-        if (result != null && result.startsWith("{\"ok\":")) {
-            JSONObject inner = new JSONObject(result);
-            JSONObject out = new JSONObject();
-            out.put("ok", inner.opt("ok"));
-            if (inner.has("result")) out.put("result", inner.get("result"));
-            if (inner.has("error")) out.put("error", inner.get("error"));
-            return out.toString();
-        }
-        return errorResponse("KCLIB_FAILED", result != null ? result : "null result");
-    }
-
-    private static String errorResponse(String code, String message) {
-        try {
-            JSONObject errObj = new JSONObject();
-            errObj.put("ok", false);
-            JSONObject err = new JSONObject();
-            err.put("code", code);
-            err.put("message", message == null ? "" : message);
-            errObj.put("error", err);
-            return errObj.toString();
-        } catch (Exception e) {
-            return "{\"ok\":false,\"error\":{\"code\":\"KCLIB_FAILED\",\"message\":\"internal error\"}}";
-        }
-    }
-
-    // Posts one structured response back into the page. Must be called from a
-    // background thread; evaluateJavascript is marshalled to the UI thread.
-    private void deliver(final String id, final String response) {
-        final String script = "if(window.NativeBridge&&window.NativeBridge._receive)"
-                + "window.NativeBridge._receive(\"" + sanitizeId(id) + "\"," + response + ");";
-        mainHandler.post(new Runnable() {
-            @Override
-            public void run() {
-                webView.evaluateJavascript(script, null);
-            }
-        });
-    }
-
-    // Reduces an id to safe JS string characters. A modified id matches no
-    // pending Promise on the JavaScript side, which is the intended failure.
-    private static String sanitizeId(String id) {
-        if (id == null) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < id.length() && sb.length() < 64; i++) {
-            char c = id.charAt(i);
-            if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')
-                    || (c >= 'A' && c <= 'Z') || c == '-' || c == '_') {
-                sb.append(c);
-            } else {
-                break;
-            }
-        }
-        return sb.toString();
-    }
-}
-NEOF
 
 cat << EOF > "$JS_INTERFACE_FILE"
 package $PACKAGE_NAME;
