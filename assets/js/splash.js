@@ -1,6 +1,6 @@
 /**
  * KcSplash - common kcapk splash library.
- * Summary: Bridges provisioning progress from NativeBridge into render callbacks registered by the per-project splash page.
+ * Summary: Bridges provisioning progress from Android into render callbacks registered by the per-project splash page.
  * Author:  KaisarCode
  * Website: https://kaisarcode.com
  * License: GNU General Public License v3.0
@@ -10,9 +10,11 @@
     var statusFn = null;
     var progressFn = null;
     var warningFn = null;
+    var tokenFn = null;
     var pendingStatus = null;
     var pendingProgress = null;
     var pendingWarning = null;
+    var pendingToken = null;
     var invokeSeq = 0;
     var invokePending = {};
 
@@ -82,26 +84,15 @@
     }
 
     /**
-     * Installs the NativeBridge shims: events park until callbacks register,
-     * and invoke responses settle their Promises.
+     * Installs the NativeBridge invoke/receive shims for project-specific
+     * native bridge calls. Provisioning events use KcSplash (set up by the
+     * splash page), not NativeBridge.
      * @return None.
      */
     function setupNativeBridge() {
         if (!window.NativeBridge) {
             window.NativeBridge = {};
         }
-
-        window.NativeBridge.setStatus = function (s) {
-            pendingStatus = deliver(statusFn, s);
-        };
-
-        window.NativeBridge.setProgress = function (done, total, current, curDone, curTotal) {
-            pendingProgress = deliver(progressFn, computeProgress(done, total, current, curDone, curTotal));
-        };
-
-        window.NativeBridge.setWarning = function (w) {
-            pendingWarning = deliver(warningFn, w);
-        };
 
         window.NativeBridge.invoke = function (method, params) {
             var id = String(++invokeSeq);
@@ -163,5 +154,43 @@
             fn(pendingWarning);
             pendingWarning = null;
         }
+    };
+
+    window.KcSplash.setStatus = function (s) {
+        pendingStatus = deliver(statusFn, s);
+    };
+
+    window.KcSplash.setProgress = function (done, total, current, curDone, curTotal) {
+        pendingProgress = deliver(progressFn, computeProgress(done, total, current, curDone, curTotal));
+    };
+
+    window.KcSplash.setWarning = function (w) {
+        pendingWarning = deliver(warningFn, w);
+    };
+
+    /**
+     * Registers a callback that receives the per-process bridge capability
+     * token once Android has injected it into this trusted page. Untrusted
+     * subframes cannot read the token (cross-origin isolation), so only
+     * trusted content can pass it to the native bridge.
+     * @param fn Callback receiving the bridge token string.
+     * @return None.
+     */
+    window.KcSplash.onToken = function (fn) {
+        tokenFn = fn;
+        if (pendingToken !== null) {
+            fn(pendingToken);
+            pendingToken = null;
+        }
+    };
+
+    /**
+     * Store the bridge capability token delivered by Android. Intended for
+     * use by the runtime, not by page code.
+     * @param t Bridge token, or null while not yet delivered.
+     * @return None.
+     */
+    window.KcSplash._setToken = function (t) {
+        pendingToken = deliver(tokenFn, t);
     };
 })();

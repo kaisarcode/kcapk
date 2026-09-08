@@ -28,11 +28,15 @@ public final class NativeBridge {
 
     /**
      * Returns the linked redp2p build version to trusted application code.
+     * The caller must present the bridge capability token that Android
+     * injects only into trusted main-frame content, so untrusted subframes
+     * cannot obtain bridge authority.
+     * @param token Bridge capability token.
      * @return Build timestamp, or zero for an untrusted caller.
      */
     @JavascriptInterface
-    public long redp2pVersion() {
-        if (!jsBridge.canUseBridge()) {
+    public long redp2pVersion(String token) {
+        if (!jsBridge.isTrustedCall(token)) {
             return 0;
         }
         return nativeRedp2pVersion();

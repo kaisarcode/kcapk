@@ -1,6 +1,9 @@
 /**
  * bridge.c - Project JNI entry points for the redp2p demo.
  * Summary: Maps the demo's explicit native API to libredp2p.
+ * Author:  KaisarCode
+ * Website: https://kaisarcode.com
+ * License: GNU General Public License v3.0
  */
 
 #include <jni.h>

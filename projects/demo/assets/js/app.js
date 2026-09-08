@@ -10,9 +10,12 @@
     'use strict';
 
     var output = document.getElementById('output');
-    var version = NativeBridge.redp2pVersion();
 
-    output.textContent = version > 0
-        ? 'redp2p version: ' + version + '\nNativeBridge loaded successfully.'
-        : 'NativeBridge is unavailable from this origin.';
+    KcSplash.onToken(function (token) {
+        var version = NativeBridge.redp2pVersion(token);
+
+        output.textContent = version > 0
+            ? 'redp2p version: ' + version + '\nNativeBridge loaded successfully.'
+            : 'NativeBridge is unavailable from this origin.';
+    });
 })();

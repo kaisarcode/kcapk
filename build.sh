@@ -163,7 +163,9 @@ RELEASE_KEY_ALIAS="$(cfg release_key_alias)"
 RELEASE_STORE_PASS="$(cfg release_store_pass)"
 RELEASE_KEY_PASS="$(cfg release_key_pass)"
 TRUSTED_ORIGINS="$(cfg trusted_origins)"
-TRUSTED_ORIGINS="${TRUSTED_ORIGINS:-file:///}"
+TRUSTED_ORIGINS="${TRUSTED_ORIGINS:-}"
+WEBVIEW_DEBUG="$(cfg webview_debug)"
+WEBVIEW_DEBUG="${WEBVIEW_DEBUG:-false}"
 
 APP_SOURCE_MANIFEST="$APP_DIR/manifest.json"
 [ -f "$APP_SOURCE_MANIFEST" ] || { echo "error: app manifest not found: $APP_SOURCE_MANIFEST" >&2; exit 1; }
@@ -799,6 +801,11 @@ import android.view.WindowManager;"
 "
 fi
 
+JAVA_WEBVIEW_DEBUG=false
+if [ "$WEBVIEW_DEBUG" = "true" ]; then
+    JAVA_WEBVIEW_DEBUG=true
+fi
+
 cat << EOF > "$PROVISIONER_FILE"
 package $PACKAGE_NAME;
 
@@ -821,53 +828,42 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.util.HashSet;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.Date;
-import java.text.SimpleDateFormat;
-import java.util.Locale;
-import java.util.TimeZone;
 
 public class Provisioner {
     private static final String TAG = "Provisioner";
 
     private static final String APP_MANIFEST_URL = "$APP_MANIFEST_URL";
     private static final String DEFAULT_START = "$APP_START";
+    private static final String INSTALLED_MANIFEST_FILE = "installed.manifest.json";
     private static final int CONNECT_TIMEOUT_MS = 15000;
     private static final int READ_TIMEOUT_MS = 30000;
 
-    // Receives provisioning progress and warnings from the background thread.
     public interface ProgressListener {
         void onStage(String text);
-
         void onProgress(long bytesDone, long bytesTotal, String current, long currentDone, long currentTotal);
-
         void onWarning(String text);
     }
 
-    // One web asset that needs downloading during this provisioning run.
     private static class Pending {
         final String label;
         final String url;
         final long size;
         final String sha;
         final File target;
-        final File tmp;
 
-        Pending(String label, String url, long size, String sha,
-                File target, File tmp) {
+        Pending(String label, String url, long size, String sha, File target) {
             this.label = label;
             this.url = url;
             this.size = size;
             this.sha = sha;
             this.target = target;
-            this.tmp = tmp;
         }
     }
 
-    // Aggregates per-file download counts into a global progress report.
     private static class Progress {
         private final ProgressListener listener;
         private final long total;
@@ -878,9 +874,7 @@ public class Provisioner {
             this.total = Math.max(0, total);
         }
 
-        void stage(String text) {
-            listener.onStage(text);
-        }
+        void stage(String text) { listener.onStage(text); }
 
         void report(String label, long currentTotal, long currentDone) {
             long done = committed + currentDone;
@@ -890,45 +884,109 @@ public class Provisioner {
             listener.onProgress(done, total, label, currentDone, currentTotal);
         }
 
-        void commit(long n) {
-            committed += n;
+        void commit(long n) { committed += n; }
+    }
+
+    private static class ManifestData {
+        final long timestamp;
+        final String start;
+        final JSONObject raw;
+        ManifestData(long timestamp, String start, JSONObject raw) {
+            this.timestamp = timestamp;
+            this.start = start;
+            this.raw = raw;
         }
     }
 
-    // Provisions the runtime environment into app-private storage and returns
-    // the local start URL (file:///...). Network errors fall back to the local
-    // cache (embedded assets / previously installed files) and are surfaced as
-    // warnings through the listener.
+    // Categorized provisioning failures so callers can distinguish network
+    // problems from exact integrity or activation failures.
+    private static class ProvisionException extends IOException {
+        ProvisionException(String message) { super(message); }
+    }
+
+    private static class DownloadException extends ProvisionException {
+        DownloadException(String message) { super(message); }
+    }
+
+    private static class SizeMismatchException extends ProvisionException {
+        SizeMismatchException(String message) { super(message); }
+    }
+
+    private static class ShaMismatchException extends ProvisionException {
+        ShaMismatchException(String message) { super(message); }
+    }
+
+    private static class IncompleteReleaseException extends ProvisionException {
+        IncompleteReleaseException(String message) { super(message); }
+    }
+
+    private static class CommitException extends ProvisionException {
+        CommitException(String message) { super(message); }
+    }
+
     public static String provision(Context context, ProgressListener listener) {
         File filesDir = context.getFilesDir();
         File wwwDir = new File(filesDir, "www");
 
+        recoverOnStartup(context, filesDir, wwwDir, listener);
         copyEmbeddedWww(context, filesDir, wwwDir);
 
-        String start = DEFAULT_START;
-        JSONObject appManifest = null;
+        String start = installedStart(filesDir);
+        if (start.isEmpty()) {
+            start = DEFAULT_START;
+        }
+
         try {
             listener.onStage("Reading app manifest...");
             boolean[] appChanged = {false};
-            appManifest = fetchJsonCached(context, APP_MANIFEST_URL, appChanged);
-            start = appManifest.optString("start", DEFAULT_START);
-
-            syncWork(context, appManifest, filesDir, listener);
-        } catch (IOException e) {
-            Log.w(TAG, "network unavailable; using local web assets", e);
-            String msg = e.getMessage();
-            listener.onWarning("Download problem: " + (msg == null ? "network error" : msg)
-                    + " (using local cache)");
-            try {
-                syncWork(context, null, filesDir, listener);
-            } catch (IOException e2) {
-                Log.e(TAG, "embedded provisioning failed", e2);
-                String msg2 = e2.getMessage();
-                listener.onWarning("Provisioning problem: " + (msg2 == null ? "unknown error" : msg2));
+            JSONObject appManifest = fetchJsonCached(context, APP_MANIFEST_URL, appChanged);
+            ManifestData manifest = validateManifest(appManifest, filesDir);
+            if (manifest == null) {
+                listener.onWarning("Invalid remote manifest (using local cache)");
+                Log.e(TAG, "remote manifest rejected; keeping local release");
+                return startUri(filesDir, start);
             }
+            start = manifest.start;
+
+            if (manifest.timestamp <= installedTimestamp(filesDir)) {
+                writeInstalledMetadata(context, appManifest);
+                listener.onStage("Done");
+                Log.i(TAG, "remote manifest is not newer than installed release");
+                return startUri(filesDir, start);
+            }
+
+            stageRelease(context, manifest, filesDir, listener);
+            commitRelease(filesDir, listener);
+            writeInstalledMetadata(context, appManifest);
+            listener.onStage("Done");
+            Log.i(TAG, "provisioning complete");
+        } catch (SizeMismatchException e) {
+            Log.w(TAG, "asset size mismatch; local release unchanged", e);
+            listener.onWarning("Asset size mismatch (using local cache)");
+        } catch (ShaMismatchException e) {
+            Log.w(TAG, "asset sha256 mismatch; local release unchanged", e);
+            listener.onWarning("Asset checksum mismatch (using local cache)");
+        } catch (IncompleteReleaseException e) {
+            Log.w(TAG, "remote release incomplete; local release unchanged", e);
+            listener.onWarning("Incomplete remote release (using local cache)");
+        } catch (CommitException e) {
+            Log.w(TAG, "update activation failed; recovery will restore local release", e);
+            listener.onWarning("Could not activate update (using local cache)");
+        } catch (DownloadException e) {
+            Log.w(TAG, "asset download failed; local release unchanged", e);
+            listener.onWarning("Download failed: " + (e.getMessage() == null ? "connection error" : e.getMessage())
+                    + " (using local cache)");
+        } catch (IOException e) {
+            Log.w(TAG, "network or provisioning failure; using local web assets", e);
+            String msg = e.getMessage();
+            listener.onWarning("Network unavailable: " + (msg == null ? "connection error" : msg)
+                    + " (using local cache)");
         }
 
-        // File.toURI() returns file:/path (single slash), fix to file:///path (triple slash)
+        return startUri(filesDir, start);
+    }
+
+    private static String startUri(File filesDir, String start) {
         String uri = new File(filesDir, start).toURI().toString();
         if (uri.startsWith("file:/") && !uri.startsWith("file:///")) {
             uri = "file:///" + uri.substring(6);
@@ -936,140 +994,555 @@ public class Provisioner {
         return uri;
     }
 
-    // Synchronizes remote web assets when their manifest is newer than the
-    // embedded web build. Existing files are retained only when their SHA-256
-    // matches the manifest record.
-    private static void syncWork(Context context, JSONObject appManifest, File filesDir, ProgressListener listener)
-            throws IOException {
-        List<Pending> pending = new ArrayList<Pending>();
+    private static void recoverOnStartup(Context context, File filesDir, File wwwDir, ProgressListener listener) {
+        File wwwUpdate = new File(filesDir, "www.update");
+        File wwwOld = new File(filesDir, "www.old");
 
-        if (appManifest != null) {
-            long embeddedBuildTimestamp = 0;
-            try {
-                String ts = readFileToString(new File(filesDir, "www.build_timestamp"));
-                if (!ts.isEmpty()) {
-                    embeddedBuildTimestamp = Long.parseLong(ts.trim());
+        if (wwwUpdate.isDirectory()) {
+            deleteRecursive(wwwUpdate);
+            Log.i(TAG, "cleaned stale www.update staging");
+        }
+
+        if (wwwDir.isDirectory()) {
+            if (isUsableWww(wwwDir, filesDir)) {
+                if (wwwOld.isDirectory()) {
+                    deleteRecursive(wwwOld);
+                    Log.i(TAG, "cleaned stale www.old backup");
                 }
-            } catch (Exception ignored) {}
-            long serverTs = appManifest.optLong("timestamp", 0);
-
-            if (embeddedBuildTimestamp > 0 && serverTs <= embeddedBuildTimestamp) {
-                listener.onStage("Done");
-                Log.i(TAG, "remote web manifest is not newer than embedded assets");
                 return;
             }
+            deleteRecursive(wwwDir);
+            Log.i(TAG, "removed unusable www");
+        }
 
-            JSONArray assets = appManifest.optJSONArray("assets");
-            if (assets != null) {
-                for (int i = 0; i < assets.length(); i++) {
-                    JSONObject a = assets.optJSONObject(i);
-                    if (a == null) {
-                        continue;
-                    }
-                    String path = a.optString("path");
-                    if (path.isEmpty()) {
-                        continue;
-                    }
-                    File target = new File(filesDir, path);
-                    String sha = a.optString("sha256");
-                    if (isUpToDate(target, sha)) {
-                        continue;
-                    }
-                    target.getParentFile().mkdirs();
-                    Log.i(TAG, "asset to install: " + path);
-                    pending.add(new Pending(path, url(APP_MANIFEST_URL, path),
-                            a.optLong("size_bytes", -1), sha, target,
-                            new File(target.getParentFile(), target.getName() + ".tmp")));
+        if (wwwOld.isDirectory()) {
+            if (renameOrCopy(wwwOld, wwwDir) && isUsableWww(wwwDir, filesDir)) {
+                deleteRecursive(wwwOld);
+                listener.onWarning("Recovered previous version");
+                Log.i(TAG, "recovered www from www.old");
+                return;
+            }
+            deleteRecursive(wwwOld);
+            Log.i(TAG, "www.old was not usable; removed");
+        }
+    }
+
+    private static boolean isUsableWww(File www, File filesDir) {
+        if (!www.isDirectory() || www.list().length == 0) {
+            return false;
+        }
+        File wwwVersion = new File(filesDir, "www.version");
+        if (!wwwVersion.isFile()) {
+            return true;
+        }
+        try {
+            JSONObject installed = readInstalledManifest(filesDir);
+            if (installed == null) {
+                return true;
+            }
+            String start = installed.optString("start", "");
+            if (start.isEmpty()) {
+                return false;
+            }
+            File startFile = resolveUnderWww(www, stripWwwPrefix(start));
+            return startFile != null && startFile.isFile();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static JSONObject readInstalledManifest(File filesDir) {
+        File f = new File(filesDir, INSTALLED_MANIFEST_FILE);
+        if (!f.isFile()) {
+            return null;
+        }
+        String body = readFileToString(f);
+        if (body.isEmpty()) {
+            return null;
+        }
+        try {
+            return new JSONObject(body);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static String installedStart(File filesDir) {
+        JSONObject installed = readInstalledManifest(filesDir);
+        if (installed != null) {
+            String start = installed.optString("start", "");
+            if (!start.isEmpty()) {
+                return start;
+            }
+        }
+        return "";
+    }
+
+    // Returns the timestamp of the currently active web release: the installed
+    // manifest timestamp when one has been committed, otherwise the embedded
+    // web build timestamp.
+    private static long installedTimestamp(File filesDir) {
+        JSONObject installed = readInstalledManifest(filesDir);
+        if (installed != null && installed.has("timestamp")) {
+            try {
+                return installed.getLong("timestamp");
+            } catch (Exception ignored) {}
+        }
+        long embeddedBuildTimestamp = 0;
+        try {
+            String ts = readFileToString(new File(filesDir, "www.build_timestamp"));
+            if (!ts.isEmpty()) {
+                embeddedBuildTimestamp = Long.parseLong(ts.trim());
+            }
+        } catch (Exception ignored) {}
+        return Math.max(0, embeddedBuildTimestamp);
+    }
+
+    // Manifest paths are stored relative to filesDir and therefore carry the
+    // "www/" prefix. Address files inside a www root (staging dir, active
+    // www dir) by stripping that prefix: the root itself is the release.
+    private static String stripWwwPrefix(String path) {
+        return path.startsWith("www/") ? path.substring(4) : path;
+    }
+
+    private static File resolveUnderWww(File www, String path) {
+        try {
+            File candidate = new File(www, path);
+            String canonical = candidate.getCanonicalPath();
+            String wwwRoot = www.getCanonicalPath();
+            if (canonical.startsWith(wwwRoot + File.separator) || canonical.equals(wwwRoot)) {
+                return candidate;
+            }
+        } catch (IOException ignored) {}
+        return null;
+    }
+
+    private static boolean renameOrCopy(File src, File dest) {
+        if (src.renameTo(dest)) {
+            return true;
+        }
+        try {
+            if (dest.exists()) {
+                deleteRecursive(dest);
+            }
+            copyDir(src, dest);
+            deleteRecursive(src);
+            return true;
+        } catch (IOException e) {
+            Log.e(TAG, "renameOrCopy failed: " + src + " -> " + dest, e);
+            return false;
+        }
+    }
+
+    private static void copyDir(File src, File dest) throws IOException {
+        if (src.isDirectory()) {
+            dest.mkdirs();
+            File[] children = src.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    copyDir(child, new File(dest, child.getName()));
+                }
+            }
+        } else {
+            InputStream in = null;
+            FileOutputStream fos = null;
+            try {
+                in = new FileInputStream(src);
+                fos = new FileOutputStream(dest);
+                copyStream(in, fos);
+            } finally {
+                closeQuietly(in);
+                closeQuietly(fos);
+            }
+        }
+    }
+
+    private static ManifestData validateManifest(JSONObject manifest, File filesDir) {
+        try {
+            if (!manifest.has("timestamp")) {
+                Log.e(TAG, "manifest validation: missing required field timestamp");
+                return null;
+            }
+            if (!manifest.has("start")) {
+                Log.e(TAG, "manifest validation: missing required field start");
+                return null;
+            }
+            if (!manifest.has("assets")) {
+                Log.e(TAG, "manifest validation: missing required field assets");
+                return null;
+            }
+
+            long timestamp = manifest.getLong("timestamp");
+            String start = manifest.getString("start");
+
+            if (!isValidRelativePath(start) || !start.startsWith("www/") || start.contains("..")) {
+                Log.e(TAG, "manifest validation: invalid start path: " + start);
+                return null;
+            }
+            if (!isPathContainedInWww(start, filesDir)) {
+                Log.e(TAG, "manifest validation: start escapes filesDir/www: " + start);
+                return null;
+            }
+
+            JSONArray assets = manifest.getJSONArray("assets");
+            Set<String> declaredPaths = new HashSet<String>();
+
+            for (int i = 0; i < assets.length(); i++) {
+                JSONObject a = assets.getJSONObject(i);
+
+                if (!a.has("path") || !a.has("size_bytes") || !a.has("sha256")) {
+                    Log.e(TAG, "manifest validation: asset missing required fields at index " + i);
+                    return null;
+                }
+
+                String path = a.getString("path");
+                if (path.isEmpty() || !isValidRelativePath(path)
+                        || !path.startsWith("www/") || path.contains("..")) {
+                    Log.e(TAG, "manifest validation: invalid asset path: " + path);
+                    return null;
+                }
+                if (!isPathContainedInWww(path, filesDir)) {
+                    Log.e(TAG, "manifest validation: asset path escapes filesDir/www: " + path);
+                    return null;
+                }
+                if (!declaredPaths.add(path)) {
+                    Log.e(TAG, "manifest validation: duplicate asset path: " + path);
+                    return null;
+                }
+
+                String sha = a.getString("sha256");
+                if (!isValidSha256(sha)) {
+                    Log.e(TAG, "manifest validation: invalid sha256 for " + path + ": " + sha);
+                    return null;
+                }
+
+                long sizeBytes = a.getLong("size_bytes");
+                if (sizeBytes < 0) {
+                    Log.e(TAG, "manifest validation: negative size_bytes for " + path);
+                    return null;
+                }
+            }
+
+            if (!declaredPaths.contains(start)) {
+                Log.e(TAG, "manifest validation: start does not reference a declared asset: " + start);
+                return null;
+            }
+
+            return new ManifestData(timestamp, start, manifest);
+        } catch (Exception e) {
+            Log.e(TAG, "manifest validation failed", e);
+            return null;
+        }
+    }
+
+    private static boolean isValidRelativePath(String path) {
+        if (path.isEmpty()) return false;
+        if (path.startsWith("/")) return false;
+        if (path.contains("\0")) return false;
+        return true;
+    }
+
+    private static boolean isPathContainedInWww(String path, File filesDir) {
+        try {
+            File wwwDir = new File(filesDir, "www");
+            File target = new File(filesDir, path);
+            String canonicalTarget = target.getCanonicalPath();
+            String canonicalWww = wwwDir.getCanonicalPath();
+            return canonicalTarget.startsWith(canonicalWww + File.separator)
+                    || canonicalTarget.equals(canonicalWww);
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    private static boolean isValidSha256(String sha) {
+        if (sha == null || sha.length() != 64) return false;
+        for (int i = 0; i < 64; i++) {
+            char c = sha.charAt(i);
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static void stageRelease(Context context, ManifestData manifest, File filesDir, ProgressListener listener)
+            throws IOException {
+        File wwwDir = new File(filesDir, "www");
+        File stagingDir = new File(filesDir, "www.update");
+
+        if (stagingDir.exists()) {
+            deleteRecursive(stagingDir);
+        }
+        if (!stagingDir.mkdirs() && !stagingDir.isDirectory()) {
+            throw new IOException("cannot create staging directory: " + stagingDir);
+        }
+
+        List<Pending> pending = new ArrayList<Pending>();
+        long total = 0;
+
+        JSONArray assets = manifest.raw.optJSONArray("assets");
+        if (assets != null) {
+            for (int i = 0; i < assets.length(); i++) {
+                JSONObject a = assets.optJSONObject(i);
+                if (a == null) continue;
+
+                String path = a.optString("path");
+                if (path.isEmpty()) continue;
+
+                String sha = a.optString("sha256", "");
+                long size = a.optLong("size_bytes", -1);
+
+                File activeFile = new File(filesDir, path);
+                File stagingFile = new File(stagingDir, stripWwwPrefix(path));
+
+                File parent = stagingFile.getParentFile();
+                if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+                    throw new IOException("cannot create staging directory: " + parent);
+                }
+
+                if (activeFile.isFile() && !sha.isEmpty() && size >= 0
+                        && activeFile.length() == size
+                        && sha.equalsIgnoreCase(computeSha256(activeFile))) {
+                    copyFile(activeFile, stagingFile);
+                    Log.i(TAG, "reused from active: " + path);
+                } else {
+                    pending.add(new Pending(path, buildUrl(APP_MANIFEST_URL, path),
+                            size, sha, stagingFile));
+                    total += Math.max(0, size);
                 }
             }
         }
 
-        if (pending.isEmpty()) {
-            listener.onStage("Done");
-            Log.i(TAG, "provisioning up to date");
-            return;
-        }
-        long total = 0;
-        for (Pending p : pending) {
-            total += Math.max(0, p.size);
-        }
-        Progress progress = new Progress(listener, total);
-        syncPending(context, pending, progress);
-        if (appManifest != null) {
-            deleteAbsent(new File(filesDir, "www"), collectExpected(appManifest));
-            writeManifestCache(context, APP_MANIFEST_URL, appManifest);
-        }
-        listener.onStage("Done");
-        Log.i(TAG, "provisioning complete");
-    }
-
-    // Installs every pending web asset in order, reporting progress.
-    private static void syncPending(Context context, List<Pending> pending, Progress progress) throws IOException {
-        for (Pending p : pending) {
-            progress.stage("Downloading " + p.label + "...");
-            downloadToFile(p.url, p.tmp, p.size, p.label, progress);
-            verifyOrThrow(p.tmp, p.size, p.sha, p.label);
-            if (!p.tmp.renameTo(p.target)) {
-                copyReplace(p.tmp, p.target);
+        if (!pending.isEmpty()) {
+            Progress progress = new Progress(listener, total);
+            for (Pending p : pending) {
+                progress.stage("Downloading " + p.label + "...");
+                Log.i(TAG, "downloading asset: " + p.label);
+                downloadFile(p.url, p.target, p.size, p.sha, p.label, progress);
             }
-            Log.i(TAG, "asset installed: " + p.label);
         }
+
+        verifyCompleteRelease(manifest, stagingDir);
     }
 
-    // Returns the set of asset paths the manifest expects, for pruning.
-    private static Set<String> collectExpected(JSONObject appManifest) {
-        Set<String> expected = new HashSet<String>();
-        JSONArray assets = appManifest.optJSONArray("assets");
+    private static void verifyCompleteRelease(ManifestData manifest, File stagingDir) throws IOException {
+        JSONArray assets = manifest.raw.optJSONArray("assets");
         if (assets == null) {
-            return expected;
+            throw new IncompleteReleaseException("no assets declared in manifest");
         }
+
         for (int i = 0; i < assets.length(); i++) {
             JSONObject a = assets.optJSONObject(i);
-            if (a != null) {
-                String path = a.optString("path");
-                if (!path.isEmpty()) {
-                    expected.add(path);
-                }
+            if (a == null) continue;
+
+            String path = a.optString("path");
+            if (path.isEmpty()) continue;
+
+            File f = new File(stagingDir, stripWwwPrefix(path));
+            if (!f.isFile()) {
+                throw new IncompleteReleaseException("staged asset missing: " + path);
+            }
+
+            long expectedSize = a.optLong("size_bytes", -1);
+            if (expectedSize >= 0 && f.length() != expectedSize) {
+                throw new SizeMismatchException("staged asset size mismatch: " + path
+                        + " (expected " + expectedSize + ", got " + f.length() + ")");
+            }
+
+            String expectedSha = a.optString("sha256", "");
+            if (!expectedSha.isEmpty() && !expectedSha.equalsIgnoreCase(computeSha256(f))) {
+                throw new ShaMismatchException("staged asset sha256 mismatch: " + path);
             }
         }
-        return expected;
+
+        File startFile = new File(stagingDir, stripWwwPrefix(manifest.start));
+        if (!startFile.isFile()) {
+            throw new IncompleteReleaseException("manifest start file missing from staging: " + manifest.start);
+        }
     }
 
-    // Deletes local files under filesDir/www that are not listed in the manifest.
-    private static void deleteAbsent(File dir, Set<String> expected) {
-        String prefix = dir.getParentFile().getAbsolutePath() + File.separator;
-        deleteAbsent(dir, expected, prefix);
-    }
+    private static void commitRelease(File filesDir, ProgressListener listener) throws IOException {
+        File wwwDir = new File(filesDir, "www");
+        File stagingDir = new File(filesDir, "www.update");
+        File backupDir = new File(filesDir, "www.old");
 
-    private static void deleteAbsent(File dir, Set<String> expected, String prefix) {
-        if (!dir.isDirectory()) {
-            return;
+        if (backupDir.exists()) {
+            deleteRecursive(backupDir);
         }
-        File[] children = dir.listFiles();
-        if (children == null) {
-            return;
-        }
-        for (File child : children) {
-            if (child.isDirectory()) {
-                deleteAbsent(child, expected, prefix);
-                if (child.list().length == 0) {
-                    child.delete();
-                }
-            } else {
-                String rel = child.getAbsolutePath();
-                if (rel.startsWith(prefix)) {
-                    rel = rel.substring(prefix.length());
-                }
-                if (!expected.contains(rel)) {
-                    child.delete();
-                    Log.i(TAG, "asset removed: " + rel);
-                }
+
+        if (wwwDir.exists()) {
+            if (!wwwDir.renameTo(backupDir)) {
+                throw new CommitException("failed to move active www to backup");
             }
         }
+
+        if (!stagingDir.renameTo(wwwDir)) {
+            if (backupDir.exists()) {
+                renameOrCopy(backupDir, wwwDir);
+                deleteRecursive(backupDir);
+            }
+            throw new CommitException("failed to activate staged release");
+        }
+
+        deleteRecursive(backupDir);
+        Log.i(TAG, "release committed successfully");
     }
 
-    // Copies the embedded www assets from the APK into filesDir/www on first
-    // launch or whenever the embedded fingerprint differs.
+    private static void downloadFile(String urlStr, File out, long expectedSize, String expectedSha,
+            String label, Progress progress) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+        conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+        conn.setReadTimeout(READ_TIMEOUT_MS);
+        conn.setInstanceFollowRedirects(true);
+        try {
+            int code = conn.getResponseCode();
+            if (code != HttpURLConnection.HTTP_OK) {
+                throw new DownloadException("HTTP " + code + " for " + label);
+            }
+            long contentLength = conn.getContentLength();
+            long totalBytes = contentLength > 0 ? contentLength : expectedSize;
+            InputStream in = null;
+            FileOutputStream fos = null;
+            try {
+                in = conn.getInputStream();
+                fos = new FileOutputStream(out);
+                byte[] buf = new byte[8192];
+                long done = 0;
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    fos.write(buf, 0, n);
+                    done += n;
+                    progress.report(label, totalBytes, done);
+                }
+                progress.commit(done);
+            } finally {
+                closeQuietly(in);
+                closeQuietly(fos);
+            }
+
+            if (expectedSize >= 0 && out.length() != expectedSize) {
+                out.delete();
+                throw new SizeMismatchException("asset size mismatch: " + label
+                        + " (expected " + expectedSize + ", got " + out.length() + ")");
+            }
+
+            String sha = computeSha256(out);
+            if (sha.isEmpty()) {
+                out.delete();
+                throw new IOException("SHA-256 computation failed for " + label);
+            }
+            if (!expectedSha.isEmpty() && !expectedSha.equalsIgnoreCase(sha)) {
+                out.delete();
+                throw new ShaMismatchException("asset sha256 mismatch: " + label);
+            }
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    private static JSONObject fetchJson(String urlStr) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+        conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+        conn.setReadTimeout(READ_TIMEOUT_MS);
+        conn.setInstanceFollowRedirects(true);
+        try {
+            int code = conn.getResponseCode();
+            if (code != HttpURLConnection.HTTP_OK) {
+                throw new IOException("HTTP " + code + " for " + urlStr);
+            }
+            StringBuilder sb = new StringBuilder();
+            BufferedReader reader = null;
+            try {
+                reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    sb.append(line).append('\n');
+                }
+            } finally {
+                closeQuietly(reader);
+            }
+            try {
+                return new JSONObject(sb.toString());
+            } catch (Exception e) {
+                throw new IOException("invalid JSON from " + urlStr, e);
+            }
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    // Fetches the remote manifest using the committed manifest cache for
+    // If-Modified-Since reuse. It never persists cache state itself; committed
+    // metadata is written only after a successful commit so that a failure
+    // before commit leaves installed-version metadata representing the
+    // previous release.
+    private static JSONObject fetchJsonCached(Context context, String urlStr, boolean[] changedOut) throws IOException {
+        File cache = manifestCacheFile(context, urlStr);
+        String cachedBody = readFileToString(cache);
+        long cachedTimestamp = 0;
+        if (cache.isFile() && !cachedBody.isEmpty()) {
+            try {
+                JSONObject cached = new JSONObject(cachedBody);
+                cachedTimestamp = cached.optLong("timestamp", 0);
+            } catch (Exception ignored) {}
+        }
+
+        HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+        conn.setRequestMethod("HEAD");
+        conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+        conn.setReadTimeout(READ_TIMEOUT_MS);
+        conn.setInstanceFollowRedirects(true);
+        if (cachedTimestamp > 0) {
+            java.text.SimpleDateFormat httpDateFormat =
+                    new java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", java.util.Locale.US);
+            httpDateFormat.setTimeZone(java.util.TimeZone.getTimeZone("GMT"));
+            conn.setRequestProperty("If-Modified-Since",
+                    httpDateFormat.format(new java.util.Date(cachedTimestamp * 1000L)));
+        }
+        try {
+            int code = conn.getResponseCode();
+            if (code == HttpURLConnection.HTTP_NOT_MODIFIED) {
+                changedOut[0] = false;
+                try {
+                    return new JSONObject(cachedBody);
+                } catch (Exception e) {
+                    throw new IOException("invalid cached JSON", e);
+                }
+            }
+            if (code != HttpURLConnection.HTTP_OK) {
+                throw new IOException("HTTP " + code + " for " + urlStr);
+            }
+        } finally {
+            conn.disconnect();
+        }
+
+        JSONObject fresh = fetchJson(urlStr);
+        changedOut[0] = true;
+        return fresh;
+    }
+
+    // Persists the accepted manifest as installed-version metadata alongside
+    // the HTTP cache. Called only after a successful commit.
+    private static void writeInstalledMetadata(Context context, JSONObject manifest) throws IOException {
+        writeStringToFile(new File(context.getFilesDir(), INSTALLED_MANIFEST_FILE), manifest.toString());
+        File cache = manifestCacheFile(context, APP_MANIFEST_URL);
+        writeStringToFile(cache, manifest.toString());
+    }
+
+    private static File manifestCacheFile(Context context, String urlStr) {
+        return new File(context.getFilesDir(), "manifest." + (urlStr.hashCode() & 0x7fffffff) + ".json");
+    }
+
+    private static String buildUrl(String manifestUrl, String path) {
+        int idx = manifestUrl.lastIndexOf("/manifest.json");
+        String base = idx >= 0 ? manifestUrl.substring(0, idx + 1) : manifestUrl;
+        if (base.endsWith("/")) {
+            return base + path;
+        }
+        return base + "/" + path;
+    }
+
     private static void copyEmbeddedWww(Context context, File filesDir, File wwwDir) {
         try {
             AssetManager am = context.getAssets();
@@ -1082,13 +1555,10 @@ public class Provisioner {
             if (wwwDir.mkdirs()) {
                 copyAssetDir(am, "www", wwwDir);
                 writeStringToFile(new File(filesDir, "www.version"), embeddedVersion);
-                // Also copy the build timestamp
                 try {
                     String embeddedTimestamp = readStreamToString(am.open("www.build_timestamp"));
                     writeStringToFile(new File(filesDir, "www.build_timestamp"), embeddedTimestamp);
-                } catch (IOException ignored) {
-                    // build_timestamp may not exist in older builds
-                }
+                } catch (IOException ignored) {}
                 Log.i(TAG, "embedded www copied to " + wwwDir);
             }
         } catch (IOException e) {
@@ -1098,9 +1568,7 @@ public class Provisioner {
 
     private static void copyAssetDir(AssetManager am, String assetPath, File destDir) throws IOException {
         String[] entries = am.list(assetPath);
-        if (entries == null) {
-            return;
-        }
+        if (entries == null) return;
         for (String entry : entries) {
             String child = assetPath + "/" + entry;
             File out = new File(destDir, entry);
@@ -1116,183 +1584,29 @@ public class Provisioner {
                 try {
                     in = am.open(child);
                     fos = new FileOutputStream(out);
-                    copy(in, fos);
+                    copyStream(in, fos);
                 } finally {
-                    close(in);
-                    close(fos);
+                    closeQuietly(in);
+                    closeQuietly(fos);
                 }
             }
         }
     }
 
-    private static void downloadToFile(String url, File out, long expected, String label, Progress progress)
-            throws IOException {
-        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-        conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
-        conn.setReadTimeout(READ_TIMEOUT_MS);
-        conn.setInstanceFollowRedirects(true);
-        try {
-            int code = conn.getResponseCode();
-            if (code != HttpURLConnection.HTTP_OK) {
-                throw new IOException("HTTP " + code + " for " + url);
-            }
-            long declared = conn.getContentLength();
-            if (declared < 0) {
-                declared = expected;
-            }
-            InputStream in = null;
-            FileOutputStream fos = null;
-            try {
-                in = conn.getInputStream();
-                fos = new FileOutputStream(out);
-                byte[] buf = new byte[8192];
-                long done = 0;
-                int n;
-                while ((n = in.read(buf)) > 0) {
-                    fos.write(buf, 0, n);
-                    done += n;
-                    progress.report(label, declared, done);
-                }
-                progress.commit(done);
-            } finally {
-                close(in);
-                close(fos);
-            }
-        } finally {
-            conn.disconnect();
-        }
-    }
-
-    private static JSONObject fetchJson(String url) throws IOException {
-        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-        conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
-        conn.setReadTimeout(READ_TIMEOUT_MS);
-        conn.setInstanceFollowRedirects(true);
-        try {
-            int code = conn.getResponseCode();
-            if (code != HttpURLConnection.HTTP_OK) {
-                throw new IOException("HTTP " + code + " for " + url);
-            }
-            StringBuilder sb = new StringBuilder();
-            BufferedReader reader = null;
-            try {
-                reader = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    sb.append(line).append('\n');
-                }
-            } finally {
-                close(reader);
-            }
-            try {
-                return new JSONObject(sb.toString());
-            } catch (Exception e) {
-                throw new IOException("invalid JSON from " + url, e);
-            }
-        } finally {
-            conn.disconnect();
-        }
-    }
-
-    // Downloads a JSON manifest and caches it next to the www directory. The
-    // cached copy lets later launches skip the full re-provisioning pass when
-    // the remote manifest has not changed.
-    // @param context App context.
-    // @param url Manifest URL.
-    // @param changed_out Set to true when the remote manifest differs from the
-    //     cached copy.
-    // @return 0 on success.
-    private static JSONObject fetchJsonCached(Context context, String url, boolean[] changedOut) throws IOException {
-        File cache = new File(context.getFilesDir(), "manifest." + (url.hashCode() & 0x7fffffff) + ".json");
-        String cachedBody = readFileToString(cache);
-        long cachedTimestamp = 0;
-        if (cache.exists()) {
-            try {
-                JSONObject cached = new JSONObject(cachedBody);
-                cachedTimestamp = cached.optLong("timestamp", 0);
-            } catch (org.json.JSONException ignored) {}
-        }
-
-        // Do a HEAD request first to check if the manifest has changed
-        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-        conn.setRequestMethod("HEAD");
-        conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
-        conn.setReadTimeout(READ_TIMEOUT_MS);
-        conn.setInstanceFollowRedirects(true);
-        if (cachedTimestamp > 0) {
-            // Use If-Modified-Since with the cached timestamp
-            // Convert epoch seconds to HTTP date format
-            SimpleDateFormat httpDateFormat = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US);
-            httpDateFormat.setTimeZone(TimeZone.getTimeZone("GMT"));
-            String ims = httpDateFormat.format(new Date(cachedTimestamp * 1000L));
-            conn.setRequestProperty("If-Modified-Since", ims);
-        }
-        try {
-            int code = conn.getResponseCode();
-            if (code == HttpURLConnection.HTTP_NOT_MODIFIED) {
-                // Manifest unchanged, use cached version
-                changedOut[0] = false;
-                try {
-                    return new JSONObject(cachedBody);
-                } catch (org.json.JSONException e) {
-                    throw new IOException("invalid cached JSON", e);
+    private static void deleteRecursive(File f) {
+        if (!f.exists()) return;
+        if (f.isDirectory()) {
+            File[] children = f.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deleteRecursive(child);
                 }
             }
-            if (code != HttpURLConnection.HTTP_OK) {
-                throw new IOException("HTTP " + code + " for " + url);
-            }
-        } finally {
-            conn.disconnect();
         }
-
-        // Manifest changed or no cache, do a full GET
-        JSONObject fresh = fetchJson(url);
-        String body = fresh.toString();
-
-        // Extract timestamp from the fresh manifest for future caching
-        long freshTimestamp = fresh.optLong("timestamp", 0);
-
-        // Write new cache
-        writeStringToFile(new File(context.getFilesDir(), "manifest." + (url.hashCode() & 0x7fffffff) + ".json"), fresh.toString());
-        if (freshTimestamp > 0) {
-            File tsCache = new File(context.getFilesDir(), "manifest." + (url.hashCode() & 0x7fffffff) + ".ts");
-            writeStringToFile(tsCache, Long.toString(freshTimestamp));
-        }
-
-        changedOut[0] = true;
-        return fresh;
+        f.delete();
     }
 
-    private static void writeManifestCache(Context context, String url, JSONObject manifest) throws IOException {
-        File cache = new File(context.getFilesDir(), "manifest." + (url.hashCode() & 0x7fffffff) + ".json");
-        writeStringToFile(cache, manifest.toString());
-    }
-
-    private static String url(String manifestUrl, String path) {
-        int idx = manifestUrl.lastIndexOf("/manifest.json");
-        String base = idx >= 0 ? manifestUrl.substring(0, idx + 1) : manifestUrl;
-        if (base.endsWith("/")) {
-            return base + path;
-        }
-        return base + "/" + path;
-    }
-
-    private static boolean isUpToDate(File target, String sha) {
-        return target.isFile() && !sha.isEmpty() && sha.equals(sha256(target));
-    }
-
-    private static void verifyOrThrow(File f, long size, String sha, String name) throws IOException {
-        if (size >= 0 && f.length() != size) {
-            f.delete();
-            throw new IOException("size mismatch for " + name);
-        }
-        if (!sha.isEmpty() && !sha.equals(sha256(f))) {
-            f.delete();
-            throw new IOException("sha256 mismatch for " + name);
-        }
-    }
-
-    private static String sha256(File f) {
+    private static String computeSha256(File f) {
         InputStream in = null;
         try {
             in = new FileInputStream(f);
@@ -1310,45 +1624,29 @@ public class Provisioner {
         } catch (Exception e) {
             return "";
         } finally {
-            close(in);
+            closeQuietly(in);
         }
     }
 
-    private static void copyReplace(File src, File dst) throws IOException {
+    private static void copyFile(File src, File dst) throws IOException {
         InputStream in = null;
         FileOutputStream fos = null;
         try {
             in = new FileInputStream(src);
             fos = new FileOutputStream(dst);
-            copy(in, fos);
+            copyStream(in, fos);
         } finally {
-            close(in);
-            close(fos);
+            closeQuietly(in);
+            closeQuietly(fos);
         }
-        src.delete();
     }
 
-    private static void copy(InputStream in, OutputStream out) throws IOException {
+    private static void copyStream(InputStream in, OutputStream out) throws IOException {
         byte[] buf = new byte[8192];
         int n;
         while ((n = in.read(buf)) > 0) {
             out.write(buf, 0, n);
         }
-    }
-
-    private static void deleteRecursive(File f) {
-        if (!f.exists()) {
-            return;
-        }
-        if (f.isDirectory()) {
-            File[] children = f.listFiles();
-            if (children != null) {
-                for (File child : children) {
-                    deleteRecursive(child);
-                }
-            }
-        }
-        f.delete();
     }
 
     private static String readFileToString(File f) {
@@ -1359,7 +1657,7 @@ public class Provisioner {
         } catch (IOException e) {
             return "";
         } finally {
-            close(in);
+            closeQuietly(in);
         }
     }
 
@@ -1379,35 +1677,20 @@ public class Provisioner {
             fos = new FileOutputStream(f);
             fos.write(s.getBytes(StandardCharsets.UTF_8));
         } finally {
-            close(fos);
+            closeQuietly(fos);
         }
     }
 
-    private static void close(InputStream in) {
-        if (in != null) {
-            try {
-                in.close();
-            } catch (IOException ignored) {
-            }
-        }
+    private static void closeQuietly(InputStream in) {
+        if (in != null) { try { in.close(); } catch (IOException ignored) {} }
     }
 
-    private static void close(OutputStream out) {
-        if (out != null) {
-            try {
-                out.close();
-            } catch (IOException ignored) {
-            }
-        }
+    private static void closeQuietly(OutputStream out) {
+        if (out != null) { try { out.close(); } catch (IOException ignored) {} }
     }
 
-    private static void close(BufferedReader reader) {
-        if (reader != null) {
-            try {
-                reader.close();
-            } catch (IOException ignored) {
-            }
-        }
+    private static void closeQuietly(BufferedReader reader) {
+        if (reader != null) { try { reader.close(); } catch (IOException ignored) {} }
     }
 }
 EOF
@@ -1422,13 +1705,18 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import java.io.File;
+import java.io.IOException;
+
 public class TrustedWebViewClient extends WebViewClient {
     private final Context context;
     private final String[] trustedOrigins;
+    private final File managedWwwDir;
 
-    public TrustedWebViewClient(Context context, String[] trustedOrigins) {
+    public TrustedWebViewClient(Context context, String[] trustedOrigins, File managedWwwDir) {
         this.context = context;
         this.trustedOrigins = trustedOrigins;
+        this.managedWwwDir = managedWwwDir;
     }
 
     private boolean openExternally(String url) {
@@ -1441,10 +1729,9 @@ public class TrustedWebViewClient extends WebViewClient {
     }
 
     private boolean handleNavigation(String url) {
-        if (JSBridge.isTrustedUrl(url, trustedOrigins)) {
+        if (JSBridge.isTrustedUrl(url, trustedOrigins, managedWwwDir)) {
             return false;
         }
-
         return openExternally(url);
     }
 
@@ -1453,10 +1740,10 @@ public class TrustedWebViewClient extends WebViewClient {
         if (!request.isForMainFrame()) {
             return false;
         }
-
         return handleNavigation(request.getUrl().toString());
     }
 }
+
 EOF
 
 cat << EOF > "$JS_INTERFACE_FILE"
@@ -1469,38 +1756,42 @@ import android.widget.Toast;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 
+import java.io.File;
 import java.net.URI;
 
 public class JSBridge {
-    private static final String LOCAL_ASSET_PREFIX = "file:///android_asset/";
+    private static final String ASSET_PREFIX = "file:///android_asset/";
     private final Context context;
     private final WebView webView;
     private final String[] trustedOrigins;
+    private final File managedWwwDir;
+    private final String gateToken;
     private volatile String currentUrl = "file:///android_asset/";
 
-    public JSBridge(Context context, WebView webView, String[] trustedOrigins) {
+    public JSBridge(Context context, WebView webView, String[] trustedOrigins, File managedWwwDir, String gateToken) {
         this.context = context;
         this.webView = webView;
         this.trustedOrigins = trustedOrigins;
+        this.managedWwwDir = managedWwwDir;
+        this.gateToken = gateToken;
     }
 
     public void setCurrentUrl(String url) {
         this.currentUrl = url;
     }
 
-    public static boolean isTrustedUrl(String url, String[] trustedOrigins) {
+    public static boolean isTrustedUrl(String url, String[] trustedOrigins, File managedWwwDir) {
         if (url == null || url.isEmpty()) {
             return false;
         }
 
         if (url.startsWith("file://")) {
-            return true;
+            return isManagedFileUrl(url, managedWwwDir);
         }
 
         try {
             URI parsedUrl = URI.create(url);
             String origin = normalizeOrigin(parsedUrl);
-
             if (origin == null) {
                 return false;
             }
@@ -1525,7 +1816,25 @@ public class JSBridge {
         return false;
     }
 
-    private static String normalizeOrigin(URI uri) {
+    static boolean isManagedFileUrl(String url, File managedWwwDir) {
+        if (managedWwwDir == null) {
+            return false;
+        }
+        try {
+            if (url.startsWith(ASSET_PREFIX)) {
+                return true;
+            }
+            String path = url.substring("file://".length());
+            File candidate = new File(path);
+            String canonical = candidate.getCanonicalPath();
+            String wwwRoot = managedWwwDir.getCanonicalPath();
+            return canonical.startsWith(wwwRoot + File.separator) || canonical.equals(wwwRoot);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    static String normalizeOrigin(URI uri) {
         String scheme = uri.getScheme();
         String host = uri.getHost();
 
@@ -1535,48 +1844,50 @@ public class JSBridge {
 
         scheme = scheme.toLowerCase();
         host = host.toLowerCase();
-        if (host.startsWith("www.")) {
-            host = host.substring(4);
-        }
 
         int port = uri.getPort();
         if (port == -1) {
             return scheme + "://" + host;
         }
-
         return scheme + "://" + host + ":" + port;
     }
 
-    boolean canUseBridge() {
+    private boolean isMainFrameTrusted() {
         String url = currentUrl;
         if (url == null) {
             return false;
         }
-        if (url.startsWith("file://")) {
-            return true;
-        }
-        try {
-            return isTrustedUrl(url, trustedOrigins);
-        } catch (Exception e) {
+        return isTrustedUrl(url, trustedOrigins, managedWwwDir);
+    }
+
+    // Subframe isolation: privileged calls must present the per-process
+    // capability token that Android injects only into trusted main-frame
+    // content. A cross-origin remote or otherwise untrusted iframe cannot
+    // read window.__kcBridgeToken, so it cannot produce a valid token.
+    boolean isTrustedCall(String token) {
+        if (token == null || gateToken == null || !token.equals(gateToken)) {
             return false;
         }
+        return isMainFrameTrusted();
+    }
+
+    boolean canUseBridge() {
+        return isMainFrameTrusted();
     }
 
     @JavascriptInterface
-    public void showToast(String message) {
-        if (!canUseBridge()) {
+    public void showToast(String token, String message) {
+        if (!isTrustedCall(token)) {
             return;
         }
-
         Toast.makeText(context, message, Toast.LENGTH_SHORT).show();
     }
 
     @JavascriptInterface
-    public boolean isOnline() {
-        if (!canUseBridge()) {
+    public boolean isOnline(String token) {
+        if (!isTrustedCall(token)) {
             return false;
         }
-
         ConnectivityManager cm = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
         if (cm != null) {
             NetworkInfo netInfo = cm.getActiveNetworkInfo();
@@ -1586,8 +1897,8 @@ public class JSBridge {
     }
 
     @JavascriptInterface
-    public String getFilesDir() {
-        if (!canUseBridge()) {
+    public String getFilesDir(String token) {
+        if (!isTrustedCall(token)) {
             return "";
         }
         return context.getFilesDir().getAbsolutePath();
@@ -1622,6 +1933,7 @@ public class MainActivity extends Activity {
     private WebView webView;
     private JSBridge jsBridge;
     private String homeUrl = null;
+    private String gateToken = null;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -1638,13 +1950,14 @@ $FULLSCREEN_SETUP
         webView.getSettings().setJavaScriptEnabled(true);
         webView.getSettings().setAllowFileAccess(true);
         webView.getSettings().setAllowFileAccessFromFileURLs(true);
-        webView.getSettings().setAllowUniversalAccessFromFileURLs(true);
         webView.getSettings().setDomStorageEnabled(true);
         webView.getSettings().setUseWideViewPort(true);
         webView.getSettings().setLoadWithOverviewMode(true);
         webView.setVerticalScrollBarEnabled(false);
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
-            WebView.setWebContentsDebuggingEnabled(true);
+        if ($JAVA_WEBVIEW_DEBUG) {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
+                WebView.setWebContentsDebuggingEnabled(true);
+            }
         }
         webView.setWebChromeClient(new android.webkit.WebChromeClient() {
             @Override
@@ -1653,12 +1966,18 @@ $FULLSCREEN_SETUP
                 return super.onConsoleMessage(consoleMessage);
             }
         });
-        jsBridge = new JSBridge(this, webView, TRUSTED_ORIGINS);
-        webView.setWebViewClient(new TrustedWebViewClient(this, TRUSTED_ORIGINS) {
+
+        File wwwDir = new File(getFilesDir(), "www");
+        gateToken = newGateToken();
+        jsBridge = new JSBridge(this, webView, TRUSTED_ORIGINS, wwwDir, gateToken);
+        webView.setWebViewClient(new TrustedWebViewClient(this, TRUSTED_ORIGINS, wwwDir) {
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 jsBridge.setCurrentUrl(url);
+                if (JSBridge.isTrustedUrl(url, TRUSTED_ORIGINS, wwwDir)) {
+                    injectGateToken(view);
+                }
                 if (homeUrl != null && homeUrl.equals(url)) {
                     view.clearHistory();
                     homeUrl = null;
@@ -1685,7 +2004,7 @@ ${NATIVE_BRIDGE_REGISTRATION}
                             @Override
                             public void run() {
                                 webView.evaluateJavascript(
-                                    "if(window.NativeBridge&&window.NativeBridge.setStatus)window.NativeBridge.setStatus(\"" + escapeJs(text) + "\");", null);
+                                    "if(window.KcSplash&&window.KcSplash.setStatus)window.KcSplash.setStatus(\"" + escapeJs(text) + "\");", null);
                             }
                         });
                     }
@@ -1697,7 +2016,7 @@ ${NATIVE_BRIDGE_REGISTRATION}
                             @Override
                             public void run() {
                                 webView.evaluateJavascript(
-                                    "if(window.NativeBridge&&window.NativeBridge.setProgress)window.NativeBridge.setProgress(" + bytesDone + "," + bytesTotal
+                                    "if(window.KcSplash&&window.KcSplash.setProgress)window.KcSplash.setProgress(" + bytesDone + "," + bytesTotal
                                         + ",\"" + escapeJs(current) + "\"," + currentDone + ","
                                         + currentTotal + ");", null);
                             }
@@ -1710,7 +2029,7 @@ ${NATIVE_BRIDGE_REGISTRATION}
                             @Override
                             public void run() {
                                 webView.evaluateJavascript(
-                                    "if(window.NativeBridge&&window.NativeBridge.setWarning)window.NativeBridge.setWarning(\"" + escapeJs(text) + "\");", null);
+                                    "if(window.KcSplash&&window.KcSplash.setWarning)window.KcSplash.setWarning(\"" + escapeJs(text) + "\");", null);
                             }
                         });
                     }
@@ -1739,6 +2058,27 @@ ${NATIVE_BRIDGE_REGISTRATION}
                 });
             }
         }).start();
+    }
+
+    private void injectGateToken(WebView view) {
+        if (gateToken == null) {
+            return;
+        }
+        String escaped = escapeJs(gateToken);
+        view.evaluateJavascript(
+                "window.__kcBridgeToken='" + escaped + "';"
+                        + "if(window.KcSplash&&window.KcSplash._setToken)window.KcSplash._setToken('" + escaped + "');",
+                null);
+    }
+
+    private static String newGateToken() {
+        byte[] buf = new byte[16];
+        new java.security.SecureRandom().nextBytes(buf);
+        StringBuilder sb = new StringBuilder();
+        for (byte b : buf) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
     }
 
     private String splashBaseUrl() {
@@ -1835,6 +2175,7 @@ ${NATIVE_BRIDGE_REGISTRATION}
         if (webView.canGoBack()) { webView.goBack(); } else { super.onBackPressed(); }
     }
 }
+
 EOF
 
 echo "Compiling Resources with AAPT2..."
