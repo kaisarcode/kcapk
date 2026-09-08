@@ -929,7 +929,9 @@ public class Provisioner {
         File wwwDir = new File(filesDir, "www");
 
         recoverOnStartup(context, filesDir, wwwDir, listener);
-        copyEmbeddedWww(context, filesDir, wwwDir);
+        if (copyEmbeddedWww(context, filesDir, wwwDir)) {
+            clearInstalledMetadata(context);
+        }
 
         String start = installedStart(filesDir);
         if (start.isEmpty()) {
@@ -946,15 +948,14 @@ public class Provisioner {
                 Log.e(TAG, "remote manifest rejected; keeping local release");
                 return startUri(filesDir, start);
             }
-            start = manifest.start;
 
             if (manifest.timestamp <= installedTimestamp(filesDir)) {
-                writeInstalledMetadata(context, appManifest);
                 listener.onStage("Done");
-                Log.i(TAG, "remote manifest is not newer than installed release");
+                Log.i(TAG, "remote manifest is not newer than active release; keeping local web assets");
                 return startUri(filesDir, start);
             }
 
+            start = manifest.start;
             stageRelease(context, manifest, filesDir, listener);
             commitRelease(filesDir, listener);
             writeInstalledMetadata(context, appManifest);
@@ -1080,7 +1081,8 @@ public class Provisioner {
 
     // Returns the timestamp of the currently active web release: the installed
     // manifest timestamp when one has been committed, otherwise the embedded
-    // web build timestamp.
+    // web build timestamp. Embedded activation clears installed metadata, so
+    // precedence always reflects the release actually active in www.
     private static long installedTimestamp(File filesDir) {
         JSONObject installed = readInstalledManifest(filesDir);
         if (installed != null && installed.has("timestamp")) {
@@ -1530,6 +1532,16 @@ public class Provisioner {
         writeStringToFile(cache, manifest.toString());
     }
 
+    // Drops previously committed remote metadata when a newer embedded APK
+    // release has been activated, so the embedded release's build timestamp
+    // and default start become authoritative over the stale remote release.
+    private static void clearInstalledMetadata(Context context) {
+        File filesDir = context.getFilesDir();
+        deleteRecursive(new File(filesDir, INSTALLED_MANIFEST_FILE));
+        deleteRecursive(manifestCacheFile(context, APP_MANIFEST_URL));
+        Log.i(TAG, "cleared installed metadata after embedded activation");
+    }
+
     private static File manifestCacheFile(Context context, String urlStr) {
         return new File(context.getFilesDir(), "manifest." + (urlStr.hashCode() & 0x7fffffff) + ".json");
     }
@@ -1543,13 +1555,16 @@ public class Provisioner {
         return base + "/" + path;
     }
 
-    private static void copyEmbeddedWww(Context context, File filesDir, File wwwDir) {
+    // Activates the embedded web assets when the APK ships a different web
+    // version than the previously active one. Returns true when embedded
+    // assets replaced the active release.
+    private static boolean copyEmbeddedWww(Context context, File filesDir, File wwwDir) {
         try {
             AssetManager am = context.getAssets();
             String embeddedVersion = readStreamToString(am.open("www.version"));
             String localVersion = readFileToString(new File(filesDir, "www.version"));
             if (embeddedVersion.equals(localVersion)) {
-                return;
+                return false;
             }
             deleteRecursive(wwwDir);
             if (wwwDir.mkdirs()) {
@@ -1560,10 +1575,12 @@ public class Provisioner {
                     writeStringToFile(new File(filesDir, "www.build_timestamp"), embeddedTimestamp);
                 } catch (IOException ignored) {}
                 Log.i(TAG, "embedded www copied to " + wwwDir);
+                return true;
             }
         } catch (IOException e) {
             Log.e(TAG, "cannot copy embedded assets", e);
         }
+        return false;
     }
 
     private static void copyAssetDir(AssetManager am, String assetPath, File destDir) throws IOException {

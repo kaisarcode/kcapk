@@ -76,6 +76,11 @@ public class ProvisionTest {
             scenario20EmbeddedFallback();
             scenario21UppercaseSha();
             scenario22NotModifiedReuse();
+            scenario23EmbeddedNewerThanRemote();
+            scenario24EmbeddedEqualToRemote();
+            scenario25RemoteNewerThanEmbedded();
+            scenario26EmbeddedSupersedesStaleRemoteMetadata();
+            scenario27SameEmbeddedVersionPreservesRemote();
         } finally {
             server.stop();
             workRoot.delete();
@@ -335,6 +340,101 @@ public class ProvisionTest {
         check("22 metadata still written", readInstalledTimestamp(dir) == T1);
     }
 
+    private static void scenario23EmbeddedNewerThanRemote() throws Exception {
+        ServerState state = servo(T0);
+        state.provisional();
+        File dir = freshDir("embedded_newer");
+        AssetManager embed = embeddedDir("embed-23", T1);
+        int indexGetsBefore = server.assetGets("www/index.html");
+        Capture cap = new Capture();
+        String start = Provisioner.provision(new TestContext(dir, embed), cap);
+        check("23 embedded copied", fileEquals(new File(dir, "www/index.html"), "embedded-index-embed-23"));
+        check("23 no remote asset downloads", server.assetGets("www/index.html") == indexGetsBefore);
+        check("23 no metadata committed", !new File(dir, "installed.manifest.json").exists());
+        check("23 warnings empty", cap.warnings.isEmpty());
+        check("23 active timestamp written", readBuildTimestamp(dir) == T1);
+        check("23 start uri is embedded index", start.contains("/www/index.html"));
+    }
+
+    private static void scenario24EmbeddedEqualToRemote() throws Exception {
+        ServerState state = servo(T1);
+        state.provisional();
+        File dir = freshDir("embedded_equal");
+        AssetManager embed = embeddedDir("embed-24", T1);
+        int indexGetsBefore = server.assetGets("www/index.html");
+        Provisioner.provision(new TestContext(dir, embed), new Capture());
+        check("24 embedded copied", fileEquals(new File(dir, "www/index.html"), "embedded-index-embed-24"));
+        check("24 no remote asset downloads", server.assetGets("www/index.html") == indexGetsBefore);
+        check("24 no metadata committed", !new File(dir, "installed.manifest.json").exists());
+    }
+
+    private static void scenario25RemoteNewerThanEmbedded() throws Exception {
+        ServerState state = servo(T2);
+        state.provisional();
+        File dir = freshDir("remote_newer");
+        AssetManager embed = embeddedDir("embed-25", T1);
+        int indexGetsBefore = server.assetGets("www/index.html");
+        Provisioner.provision(new TestContext(dir, embed), new Capture());
+        check("25 remote asset downloaded", server.assetGets("www/index.html") > indexGetsBefore);
+        check("25 remote release committed",
+                fileContentEquals(new File(dir, "www/index.html"), content(T2, "index")));
+        check("25 metadata committed", readInstalledTimestamp(dir) == T2);
+    }
+
+    private static void scenario26EmbeddedSupersedesStaleRemoteMetadata() throws Exception {
+        ServerState old = servo(T2);
+        old.provisional();
+        File dir = freshDir("supersede");
+        Provisioner.provision(new TestContext(dir, noAssets()), new Capture());
+        check("26a remote 3000 committed", readInstalledTimestamp(dir) == T2);
+
+        AssetManager embed = embeddedDir("embed-26", 4000L);
+        Provisioner.provision(new TestContext(dir, embed), new Capture());
+        check("26b stale metadata cleared", !new File(dir, "installed.manifest.json").exists());
+        check("26b embedded active", fileEquals(new File(dir, "www/index.html"), "embedded-index-embed-26"));
+        check("26b active timestamp 4000", readBuildTimestamp(dir) == 4000L);
+
+        ServerState mid = servo(3500L);
+        mid.provisional();
+        int indexGetsBefore = server.assetGets("www/index.html");
+        String start = Provisioner.provision(new TestContext(dir, embed), new Capture());
+        check("26c no download for older remote", server.assetGets("www/index.html") == indexGetsBefore);
+        check("26c metadata stays cleared", !new File(dir, "installed.manifest.json").exists());
+        check("26c embedded still active", fileEquals(new File(dir, "www/index.html"), "embedded-index-embed-26"));
+        check("26c start stays local embedded", start.contains("/www/index.html"));
+
+        ServerState newer = servo(4500L);
+        newer.provisional();
+        int indexGetsBefore2 = server.assetGets("www/index.html");
+        Provisioner.provision(new TestContext(dir, embed), new Capture());
+        check("26d newer remote downloaded", server.assetGets("www/index.html") > indexGetsBefore2);
+        check("26d remote 4500 committed", readInstalledTimestamp(dir) == 4500L);
+        check("26d remote release active",
+                fileContentEquals(new File(dir, "www/index.html"), content(4500L, "index")));
+    }
+
+    private static void scenario27SameEmbeddedVersionPreservesRemote() throws Exception {
+        ServerState low = servo(T0);
+        low.provisional();
+        File dir = freshDir("same_embedded");
+        AssetManager embed = embeddedDir("embed-27", T1);
+        Provisioner.provision(new TestContext(dir, embed), new Capture());
+        check("27a embedded active", fileEquals(new File(dir, "www/index.html"), "embedded-index-embed-27"));
+
+        ServerState remote = servo(T2);
+        remote.provisional();
+        Provisioner.provision(new TestContext(dir, embed), new Capture());
+        check("27b remote 3000 committed", readInstalledTimestamp(dir) == T2);
+
+        int indexGetsBefore = server.assetGets("www/index.html");
+        String start = Provisioner.provision(new TestContext(dir, embed), new Capture());
+        check("27c no re-copy of same embedded version", server.assetGets("www/index.html") == indexGetsBefore);
+        check("27c metadata preserved", readInstalledTimestamp(dir) == T2);
+        check("27c remote release still active",
+                fileContentEquals(new File(dir, "www/index.html"), content(T2, "index")));
+        check("27c start is remote start", start.contains("/www/index.html"));
+    }
+
     private static void assertRejected(String name, String detail, String json) throws Exception {
         server.setManifest(json);
         server.setOmitted(new HashSet<String>());
@@ -431,6 +531,23 @@ public class ProvisionTest {
             return -1;
         }
         return new JSONObject(new String(fileBytes(f), StandardCharsets.UTF_8)).optLong("timestamp", -1);
+    }
+
+    private static long readBuildTimestamp(File dir) throws Exception {
+        File f = new File(dir, "www.build_timestamp");
+        if (!f.isFile()) {
+            return -1;
+        }
+        return Long.parseLong(new String(fileBytes(f), StandardCharsets.UTF_8).trim());
+    }
+
+    private static AssetManager embeddedDir(String version, long ts) throws IOException {
+        File root = new File(workRoot, "embed-" + version + "-" + (++seq));
+        writeFile(new File(root, "www/index.html"), ("embedded-index-" + version).getBytes(StandardCharsets.UTF_8));
+        writeFile(new File(root, "www/css/style.css"), ("embedded-css-" + version).getBytes(StandardCharsets.UTF_8));
+        writeFile(new File(root, "www.version"), version.getBytes(StandardCharsets.UTF_8));
+        writeFile(new File(root, "www.build_timestamp"), String.valueOf(ts).getBytes(StandardCharsets.UTF_8));
+        return new AssetManager(root);
     }
 
     private static List<File> manifestCacheFiles(File dir) {
