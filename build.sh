@@ -1,8 +1,8 @@
 #!/bin/sh
 # build.sh
 # Summary: Manifest-driven Android thin-client APK/AAB builder.
-#          Builds a WebView shell with project-owned native integration and
-#          publishes the app manifest, assets, and APK to ../dist/<project>/.
+#          Generates the common kclib bridge, packages native dependencies,
+#          and publishes the app manifest, assets, and APK to ../dist/<project>/.
 # Author:  KaisarCode
 # Website: https://kaisarcode.com
 # License: https://www.gnu.org/licenses/gpl-3.0.html
@@ -59,7 +59,7 @@ json_get () {
                     s = substr(s, 2)
                     if (match(s, /^[^"]*/)) {
                         print substr(s, 1, RLENGTH)
-                        s = substr(s, RLENGTH + 1)
+                        s = substr(s, RLENGTH + 2)
                     }
                     sub(/^[[:space:]]*/, "", s)
                     if (substr(s, 1, 1) == ",") {
@@ -196,7 +196,6 @@ VALUES_DIR="$RES_DIR/values"
 ASSETS_DIR="$BASE_DIR/assets"
 ASSETS_SOURCE="$APP_DIR/assets"
 NATIVE_SOURCE_DIR="$APP_DIR/native"
-NATIVE_BRIDGE_SOURCE="$NATIVE_SOURCE_DIR/NativeBridge.java"
 NATIVE_C_SOURCE="$NATIVE_SOURCE_DIR/bridge.c"
 COMMON_ASSETS_DIR="assets"
 PUBLISH_DIR="../dist/$PROJECT_NAME"
@@ -252,13 +251,7 @@ JS_INTERFACE_FILE="$SRC_DIR/JSBridge.java"
 WEBVIEW_CLIENT_FILE="$SRC_DIR/TrustedWebViewClient.java"
 PROVISIONER_FILE="$SRC_DIR/Provisioner.java"
 NATIVE_BRIDGE_FILE="$SRC_DIR/NativeBridge.java"
-
-NATIVE_BRIDGE_REGISTRATION=""
-NATIVE_BRIDGE_JAVA_SOURCE=""
-if [ -f "$NATIVE_BRIDGE_SOURCE" ]; then
-    NATIVE_BRIDGE_REGISTRATION="        webView.addJavascriptInterface(new NativeBridge(this, webView, jsBridge), \"NativeBridge\");"
-    NATIVE_BRIDGE_JAVA_SOURCE="$NATIVE_BRIDGE_FILE"
-fi
+NATIVE_DISPATCHER_FILE="$BASE_DIR/native-bridge.c"
 
 KCLIB_DIST_DIR="$(cfg kclib_dist_dir)"
 KCLIB_DIST_DIR="${KCLIB_DIST_DIR:-../../kclib/dist}"
@@ -355,13 +348,27 @@ setup_release_signing () {
     fi
 }
 
-# Prepares declared kclib headers and Android shared libraries for one build.
-# @return 0 when every declared dependency is ready.
+# Rejects a manifest dependency name that cannot safely name a kclib package.
+# @param name Candidate kclib name.
+# @return 0 when the name is lowercase alphanumeric with optional underscores.
+valid_kclib_name () {
+    case "$1" in
+        *[!abcdefghijklmnopqrstuvwxyz0123456789_]*|'') return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# Prepares implicit abi and declared kclib headers and Android shared libraries.
+# @return 0 when every effective dependency is ready.
 prepare_kclib_dependencies () {
     [ -d "$KCLIB_DIST_DIR" ] || { echo "error: kclib dist directory not found: $KCLIB_DIST_DIR" >&2; exit 1; }
 
     for DEP in $KCLIB_DEPS; do
-        [ -n "$DEP" ] || continue
+        valid_kclib_name "$DEP" || { echo "error: invalid kclib name: $DEP" >&2; exit 1; }
+        [ "$DEP" != "abi" ] || { echo "error: abi is implicit and must not be listed in manifest.json:kclib" >&2; exit 1; }
+    done
+
+    for DEP in abi $KCLIB_DEPS; do
         DEP_DIST_DIR="$KCLIB_DIST_DIR/$DEP.c"
         DEP_ZIP="$DEP_DIST_DIR/source.zip"
         DEP_WORK_DIR="$KCLIB_WORK_DIR/$DEP"
@@ -369,7 +376,12 @@ prepare_kclib_dependencies () {
 
         [ -f "$DEP_ZIP" ] || { echo "error: kclib source package not found: $DEP_ZIP" >&2; exit 1; }
         unzip -q "$DEP_ZIP" -d "$DEP_WORK_DIR" || { echo "error: failed to extract: $DEP_ZIP" >&2; exit 1; }
-        [ -f "$DEP_HEADER_DIR/lib$DEP.h" ] || { echo "error: kclib public header not found: $DEP_HEADER_DIR/lib$DEP.h" >&2; exit 1; }
+        if [ "$DEP" = "abi" ]; then
+            DEP_HEADER="$DEP_HEADER_DIR/abi.h"
+        else
+            DEP_HEADER="$DEP_HEADER_DIR/lib$DEP.h"
+        fi
+        [ -f "$DEP_HEADER" ] || { echo "error: kclib public header not found: $DEP_HEADER" >&2; exit 1; }
 
         for KCLIB_ARCH in aarch64 armv7; do
             case "$KCLIB_ARCH" in
@@ -385,11 +397,449 @@ prepare_kclib_dependencies () {
     done
 }
 
+# Writes the Java and JNI sources for the manifest-limited kclib dispatcher.
+# @return 0 when both generated bridge sources are written.
+generate_common_bridge () {
+    BRIDGE_SELECTED_LIBRARIES=""
+    BRIDGE_SELECTED_LIBRARY_COUNT=0
+    PROJECT_NATIVE_LIBRARY_LOAD=""
+    for DEP in $KCLIB_DEPS; do
+        BRIDGE_SELECTED_LIBRARIES="$BRIDGE_SELECTED_LIBRARIES
+    \"$DEP\","
+        BRIDGE_SELECTED_LIBRARY_COUNT=$((BRIDGE_SELECTED_LIBRARY_COUNT + 1))
+    done
+    if [ "$BRIDGE_SELECTED_LIBRARY_COUNT" -eq 0 ]; then
+        BRIDGE_SELECTED_LIBRARIES="    NULL,"
+    fi
+    if [ -f "$NATIVE_C_SOURCE" ]; then
+        PROJECT_NATIVE_LIBRARY_LOAD='        System.loadLibrary("projectbridge");'
+    fi
+
+    cat <<EOF > "$NATIVE_BRIDGE_FILE"
+package $PACKAGE_NAME;
+
+import android.content.Context;
+import android.webkit.JavascriptInterface;
+import android.webkit.WebView;
+
+/**
+ * Provides trusted JavaScript access to manifest-selected kclib functions.
+ */
+public final class NativeBridge {
+    static {
+        System.loadLibrary("kcapkbridge");
+$PROJECT_NATIVE_LIBRARY_LOAD
+    }
+
+    private final JSBridge jsBridge;
+
+    /**
+     * Connects the generated native dispatcher to the application library directory.
+     * @param context Android application context.
+     * @param webView Application WebView.
+     * @param jsBridge Shared trusted-origin gate.
+     * @return None.
+     */
+    public NativeBridge(Context context, WebView webView, JSBridge jsBridge) {
+        this.jsBridge = jsBridge;
+        nativeInit(context.getApplicationInfo().nativeLibraryDir);
+    }
+
+    /**
+     * Calls one known function in a manifest-selected kclib.
+     * @param token Trusted bridge capability token.
+     * @param library Selected kclib name.
+     * @param function Public function name from libabi metadata.
+     * @param args JSON argument array.
+     * @return JSON result or explicit error.
+     */
+    @JavascriptInterface
+    public String callNative(String token, String library, String function, String args) {
+        if (!jsBridge.isTrustedCall(token)) {
+            return "{\"error\":\"unauthorized\"}";
+        }
+        if (library == null || function == null) {
+            return "{\"error\":\"invalid arguments\"}";
+        }
+        return nativeCall(library, function, args == null ? "[]" : args);
+    }
+
+    /**
+     * Lists only the optional kclibs selected by the application manifest.
+     * @param token Trusted bridge capability token.
+     * @return JSON library array, or an empty array for an untrusted caller.
+     */
+    @JavascriptInterface
+    public String queryLibraries(String token) {
+        if (!jsBridge.isTrustedCall(token)) {
+            return "[]";
+        }
+        return nativeQueryLibraries();
+    }
+
+    /**
+     * Lists libabi-known functions for one selected optional kclib.
+     * @param token Trusted bridge capability token.
+     * @param library Selected kclib name.
+     * @return JSON function array, or an empty array for an invalid caller.
+     */
+    @JavascriptInterface
+    public String queryFunctions(String token, String library) {
+        if (!jsBridge.isTrustedCall(token)) {
+            return "[]";
+        }
+        if (library == null) {
+            return "[]";
+        }
+        return nativeQueryFunctions(library);
+    }
+
+    private static native String nativeInit(String libraryDir);
+    private static native String nativeCall(String library, String function, String args);
+    private static native String nativeQueryLibraries();
+    private static native String nativeQueryFunctions(String library);
+}
+EOF
+
+    cat <<EOF > "$NATIVE_DISPATCHER_FILE"
+/**
+ * native-bridge.c - Generated manifest-limited kclib JNI dispatcher
+ * Summary: Resolves and invokes libabi-described selected native functions.
+ *
+ * Author: KaisarCode
+ * Website: https://kaisarcode.com
+ * License: GNU General Public License v3.0
+ */
+
+#include <jni.h>
+#include <dlfcn.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "abi.h"
+
+#define BRIDGE_MAX_PATH 1024
+
+static const char *const bridge_selected_libraries[] = {
+$BRIDGE_SELECTED_LIBRARIES};
+
+static const size_t bridge_selected_library_count = $BRIDGE_SELECTED_LIBRARY_COUNT;
+static char bridge_library_dir[BRIDGE_MAX_PATH];
+
+/**
+ * Tests whether a requested library is an optional manifest dependency.
+ * @param library Requested library name.
+ * @return Nonzero when the library is selected.
+ */
+static int bridge_library_selected(const char *library) {
+    size_t index;
+
+    if (library == NULL) {
+        return 0;
+    }
+    for (index = 0; index < bridge_selected_library_count; index++) {
+        if (strcmp(library, bridge_selected_libraries[index]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Creates a Java string containing a fixed JSON response.
+ * @param env JNI environment.
+ * @param response JSON response text.
+ * @return Newly allocated Java string.
+ */
+static jstring bridge_response(JNIEnv *env, const char *response) {
+    return (*env)->NewStringUTF(env, response);
+}
+
+/**
+ * Verifies that a call provides an empty JSON argument array.
+ * @param args JSON argument text.
+ * @return Nonzero for an empty JSON array with optional surrounding whitespace.
+ */
+static int bridge_empty_arguments(const char *args) {
+    while (*args == ' ' || *args == '\t' || *args == '\n' || *args == '\r') {
+        args++;
+    }
+    if (args[0] != '[' || args[1] != ']') {
+        return 0;
+    }
+    args += 2;
+    while (*args == ' ' || *args == '\t' || *args == '\n' || *args == '\r') {
+        args++;
+    }
+    return *args == '\0';
+}
+
+/**
+ * Calls a no-argument function using its libabi return category.
+ * @param function Native function pointer.
+ * @param type libabi return category.
+ * @param output Result response buffer.
+ * @param output_size Result response buffer size.
+ * @return 0 when the call was made, or -1 for an unsupported category.
+ */
+static int bridge_invoke_noargs(void *function, kc_abi_type_t type, char *output, size_t output_size) {
+    switch (type) {
+    case KC_ABI_TYPE_VOID:
+        ((void (*)(void))function)();
+        snprintf(output, output_size, "{\"result\":null}");
+        return 0;
+    case KC_ABI_TYPE_INT:
+    case KC_ABI_TYPE_ENUM:
+        snprintf(output, output_size, "{\"result\":%d}", ((int (*)(void))function)());
+        return 0;
+    case KC_ABI_TYPE_UINT:
+        snprintf(output, output_size, "{\"result\":%u}", ((unsigned int (*)(void))function)());
+        return 0;
+    case KC_ABI_TYPE_U16:
+        snprintf(output, output_size, "{\"result\":%u}", (unsigned int)((uint16_t (*)(void))function)());
+        return 0;
+    case KC_ABI_TYPE_U64:
+        snprintf(output, output_size, "{\"result\":%llu}", (unsigned long long)((uint64_t (*)(void))function)());
+        return 0;
+    case KC_ABI_TYPE_SIZE:
+        snprintf(output, output_size, "{\"result\":%llu}", (unsigned long long)((size_t (*)(void))function)());
+        return 0;
+    case KC_ABI_TYPE_LONG:
+        snprintf(output, output_size, "{\"result\":%ld}", ((long (*)(void))function)());
+        return 0;
+    case KC_ABI_TYPE_POINTER:
+        snprintf(output, output_size, "{\"result\":%llu}",
+            (unsigned long long)(uintptr_t)((void *(*)(void))function)());
+        return 0;
+    default:
+        return -1;
+    }
+}
+
+/**
+ * Initializes the fixed application native-library directory.
+ * @param env JNI environment.
+ * @param type NativeBridge class.
+ * @param directory Installed application library directory.
+ * @return JSON initialization result.
+ */
+static jstring bridge_init(JNIEnv *env, jclass type, jstring directory) {
+    const char *value;
+
+    (void)type;
+    value = (*env)->GetStringUTFChars(env, directory, NULL);
+    if (value == NULL || strlen(value) >= sizeof(bridge_library_dir)) {
+        if (value != NULL) {
+            (*env)->ReleaseStringUTFChars(env, directory, value);
+        }
+        return bridge_response(env, "{\"error\":\"invalid library directory\"}");
+    }
+    strcpy(bridge_library_dir, value);
+    (*env)->ReleaseStringUTFChars(env, directory, value);
+    return bridge_response(env, "{}");
+}
+
+/**
+ * Returns a JSON list of manifest-selected optional libraries.
+ * @param env JNI environment.
+ * @param type NativeBridge class.
+ * @return JSON library array.
+ */
+static jstring bridge_query_libraries(JNIEnv *env, jclass type) {
+    char output[4096];
+    size_t index;
+    size_t written;
+
+    (void)type;
+    written = 1;
+    output[0] = '[';
+    for (index = 0; index < bridge_selected_library_count; index++) {
+        int result = snprintf(output + written, sizeof(output) - written, "%s\"%s\"",
+            index == 0 ? "" : ",", bridge_selected_libraries[index]);
+        if (result < 0 || (size_t)result >= sizeof(output) - written) {
+            return bridge_response(env, "[]");
+        }
+        written += (size_t)result;
+    }
+    output[written++] = ']';
+    output[written] = '\0';
+    return bridge_response(env, output);
+}
+
+/**
+ * Lists libabi metadata for one manifest-selected library.
+ * @param env JNI environment.
+ * @param type NativeBridge class.
+ * @param library_name Selected library name.
+ * @return JSON function array.
+ */
+static jstring bridge_query_functions(JNIEnv *env, jclass type, jstring library_name) {
+    const char *library;
+    const kc_abi_library_t *descriptor;
+    char output[16384];
+    size_t index;
+    size_t written;
+
+    (void)type;
+    library = (*env)->GetStringUTFChars(env, library_name, NULL);
+    if (library == NULL || !bridge_library_selected(library)) {
+        if (library != NULL) {
+            (*env)->ReleaseStringUTFChars(env, library_name, library);
+        }
+        return bridge_response(env, "[]");
+    }
+    descriptor = kc_abi_library(library);
+    (*env)->ReleaseStringUTFChars(env, library_name, library);
+    if (descriptor == NULL) {
+        return bridge_response(env, "[]");
+    }
+    written = 1;
+    output[0] = '[';
+    for (index = 0; index < descriptor->function_count; index++) {
+        int result = snprintf(output + written, sizeof(output) - written, "%s\"%s\"",
+            index == 0 ? "" : ",", descriptor->functions[index].name);
+        if (result < 0 || (size_t)result >= sizeof(output) - written) {
+            return bridge_response(env, "[]");
+        }
+        written += (size_t)result;
+    }
+    output[written++] = ']';
+    output[written] = '\0';
+    return bridge_response(env, output);
+}
+
+/**
+ * Resolves and invokes a selected libabi-described no-argument function.
+ * @param env JNI environment.
+ * @param type NativeBridge class.
+ * @param library_name Selected library name.
+ * @param function_name Public function name.
+ * @param arguments JSON argument array.
+ * @return JSON result or explicit dispatch error.
+ */
+static jstring bridge_call(JNIEnv *env, jclass type, jstring library_name, jstring function_name, jstring arguments) {
+    const char *library;
+    const char *name;
+    const char *args;
+    const kc_abi_function_t *descriptor;
+    char path[BRIDGE_MAX_PATH];
+    char output[160];
+    void *handle;
+    void *function;
+
+    (void)type;
+    library = (*env)->GetStringUTFChars(env, library_name, NULL);
+    name = (*env)->GetStringUTFChars(env, function_name, NULL);
+    args = (*env)->GetStringUTFChars(env, arguments, NULL);
+    if (library == NULL || name == NULL || args == NULL) {
+        output[0] = '\0';
+        strcpy(output, "{\"error\":\"invalid arguments\"}");
+        goto done;
+    }
+    if (!bridge_library_selected(library)) {
+        strcpy(output, "{\"error\":\"undeclared library\"}");
+        goto done;
+    }
+    descriptor = kc_abi_function(library, name);
+    if (descriptor == NULL) {
+        strcpy(output, "{\"error\":\"unknown function\"}");
+        goto done;
+    }
+    if (descriptor->param_count != 0 || !bridge_empty_arguments(args)) {
+        strcpy(output, "{\"error\":\"unsupported function arguments\"}");
+        goto done;
+    }
+    if (snprintf(path, sizeof(path), "%s/lib%s.so", bridge_library_dir, library) >= (int)sizeof(path)) {
+        strcpy(output, "{\"error\":\"library path too long\"}");
+        goto done;
+    }
+    handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (handle == NULL) {
+        strcpy(output, "{\"error\":\"selected library unavailable\"}");
+        goto done;
+    }
+    function = dlsym(handle, name);
+    if (function == NULL) {
+        dlclose(handle);
+        strcpy(output, "{\"error\":\"known symbol unavailable\"}");
+        goto done;
+    }
+    if (bridge_invoke_noargs(function, descriptor->ret, output, sizeof(output)) != 0) {
+        strcpy(output, "{\"error\":\"unsupported return type\"}");
+    }
+    dlclose(handle);
+
+done:
+    if (library != NULL) {
+        (*env)->ReleaseStringUTFChars(env, library_name, library);
+    }
+    if (name != NULL) {
+        (*env)->ReleaseStringUTFChars(env, function_name, name);
+    }
+    if (args != NULL) {
+        (*env)->ReleaseStringUTFChars(env, arguments, args);
+    }
+    return bridge_response(env, output);
+}
+
+/**
+ * Registers generated native methods for the generated NativeBridge class.
+ * @param vm Java virtual machine.
+ * @param reserved Unused JNI value.
+ * @return JNI version when registration succeeds, or JNI_ERR otherwise.
+ */
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
+    JNIEnv *env;
+    jclass type;
+    static const JNINativeMethod methods[] = {
+        {"nativeInit", "(Ljava/lang/String;)Ljava/lang/String;", (void *)bridge_init},
+        {"nativeCall", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", (void *)bridge_call},
+        {"nativeQueryLibraries", "()Ljava/lang/String;", (void *)bridge_query_libraries},
+        {"nativeQueryFunctions", "(Ljava/lang/String;)Ljava/lang/String;", (void *)bridge_query_functions}
+    };
+
+    (void)reserved;
+    if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+        return JNI_ERR;
+    }
+    type = (*env)->FindClass(env, "$PACKAGE_SUBPATH/NativeBridge");
+    if (type == NULL || (*env)->RegisterNatives(env, type, methods,
+            (jint)(sizeof(methods) / sizeof(methods[0]))) != JNI_OK) {
+        return JNI_ERR;
+    }
+    return JNI_VERSION_1_6;
+}
+EOF
+}
+
+# Builds the generated common kclib dispatcher for both supported Android ABIs.
+# @return 0 when both generated dispatcher outputs compile.
+build_common_native () {
+    [ -x "$NDK_TOOLCHAIN/bin/aarch64-linux-android$MIN_SDK-clang" ] || { echo "error: Android NDK compiler not found under: $NDK_TOOLCHAIN" >&2; exit 1; }
+
+    for KCLIB_ARCH in aarch64 armv7; do
+        case "$KCLIB_ARCH" in
+            aarch64)
+                ANDROID_ABI="arm64-v8a"
+                NDK_CC="$NDK_TOOLCHAIN/bin/aarch64-linux-android$MIN_SDK-clang"
+                ;;
+            armv7)
+                ANDROID_ABI="armeabi-v7a"
+                NDK_CC="$NDK_TOOLCHAIN/bin/armv7a-linux-androideabi$MIN_SDK-clang"
+                ;;
+        esac
+        "$NDK_CC" -shared -fPIC -I"$KCLIB_WORK_DIR/abi/abi.c/src" \
+            -L"$NATIVE_PACKAGE_DIR/lib/$ANDROID_ABI" "-Wl,-rpath,\$ORIGIN" \
+            -o "$NATIVE_PACKAGE_DIR/lib/$ANDROID_ABI/libkcapkbridge.so" \
+            "$NATIVE_DISPATCHER_FILE" -labi || { echo "error: common bridge compilation failed for $KCLIB_ARCH" >&2; exit 1; }
+    done
+}
+
 # Builds project JNI code for the Android ABIs supported by kcapk.
 # @return 0 when no project native code exists or both outputs compile.
 build_project_native () {
     [ -f "$NATIVE_C_SOURCE" ] || return 0
-    [ -f "$NATIVE_BRIDGE_SOURCE" ] || { echo "error: project native C source requires $NATIVE_BRIDGE_SOURCE" >&2; exit 1; }
     [ -x "$NDK_TOOLCHAIN/bin/aarch64-linux-android$MIN_SDK-clang" ] || { echo "error: Android NDK compiler not found under: $NDK_TOOLCHAIN" >&2; exit 1; }
 
     for KCLIB_ARCH in aarch64 armv7; do
@@ -708,6 +1158,8 @@ echo "www build timestamp: $BUILD_TIMESTAMP"
 
 echo "Preparing declared kclib dependencies..."
 prepare_kclib_dependencies
+generate_common_bridge
+build_common_native
 build_project_native
 
 JAVA_TRUSTED_ORIGINS=""
@@ -2002,7 +2454,7 @@ $FULLSCREEN_SETUP
             }
         });
         webView.addJavascriptInterface(jsBridge, JS_INTERFACE_NAME);
-${NATIVE_BRIDGE_REGISTRATION}
+        webView.addJavascriptInterface(new NativeBridge(this, webView, jsBridge), "NativeBridge");
 
         webView.loadDataWithBaseURL(splashBaseUrl(), loadSplashPage(), "text/html", "UTF-8", null);
 
@@ -2196,9 +2648,6 @@ ${NATIVE_BRIDGE_REGISTRATION}
 EOF
 
 echo "Compiling Resources with AAPT2..."
-if [ -f "$NATIVE_BRIDGE_SOURCE" ]; then
-    cp "$NATIVE_BRIDGE_SOURCE" "$NATIVE_BRIDGE_FILE"
-fi
 "$AAPT2" compile --dir "$RES_DIR" -o "$FLAT_RES_DIR/res.zip" || { echo "Error: AAPT2 Compile failed."; exit 1; }
 
 echo "Linking Resources, Manifest, and Generating R.java..."
@@ -2213,26 +2662,15 @@ echo "Linking Resources, Manifest, and Generating R.java..."
     --auto-add-overlay || { echo "Error: AAPT2 Link failed."; exit 1; }
 
 echo "Compiling Source Code..."
-if [ -n "$NATIVE_BRIDGE_JAVA_SOURCE" ]; then
-    javac -g:none --release 11 \
-        -classpath "$ANDROID_JAR" \
-        -d "$TEMP_CLASSES_DIR" \
-        "$R_PACKAGE_DIR/R.java" \
-        "$WEBVIEW_CLIENT_FILE" \
-        "$MAIN_ACTIVITY_FILE" \
-        "$JS_INTERFACE_FILE" \
-        "$NATIVE_BRIDGE_JAVA_SOURCE" \
-        "$PROVISIONER_FILE" || { echo "Error: JAVAC failed."; exit 1; }
-else
-    javac -g:none --release 11 \
-        -classpath "$ANDROID_JAR" \
-        -d "$TEMP_CLASSES_DIR" \
-        "$R_PACKAGE_DIR/R.java" \
-        "$WEBVIEW_CLIENT_FILE" \
-        "$MAIN_ACTIVITY_FILE" \
-        "$JS_INTERFACE_FILE" \
-        "$PROVISIONER_FILE" || { echo "Error: JAVAC failed."; exit 1; }
-fi
+javac -g:none --release 11 \
+    -classpath "$ANDROID_JAR" \
+    -d "$TEMP_CLASSES_DIR" \
+    "$R_PACKAGE_DIR/R.java" \
+    "$WEBVIEW_CLIENT_FILE" \
+    "$MAIN_ACTIVITY_FILE" \
+    "$JS_INTERFACE_FILE" \
+    "$NATIVE_BRIDGE_FILE" \
+    "$PROVISIONER_FILE" || { echo "Error: JAVAC failed."; exit 1; }
 
 echo "Packaging .class files into temporary JAR..."
 CURRENT_DIR=$(pwd)

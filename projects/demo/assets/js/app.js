@@ -1,6 +1,6 @@
 /**
  * redp2p demo app script.
- * Summary: Verifies the project's explicit redp2p NativeBridge mapping.
+ * Summary: Verifies generated libabi-based redp2p dispatch.
  * Author: KaisarCode
  * Website: https://kaisarcode.com
  * License: GNU General Public License v3.0
@@ -12,10 +12,16 @@
     var output = document.getElementById('output');
 
     KcSplash.onToken(function (token) {
-        var version = NativeBridge.redp2pVersion(token);
+        var response = NativeBridge.callNative(token, 'redp2p', 'redp2p_version', '[]');
+        var result;
 
-        output.textContent = version > 0
-            ? 'redp2p version: ' + version + '\nNativeBridge loaded successfully.'
-            : 'NativeBridge is unavailable from this origin.';
+        try {
+            result = JSON.parse(response);
+        } catch (error) {
+            result = { error: 'invalid native response' };
+        }
+        output.textContent = result.result > 0
+            ? 'redp2p version: ' + result.result + '\nNativeBridge loaded successfully.'
+            : 'NativeBridge error: ' + (result.error || 'unavailable');
     });
 })();
