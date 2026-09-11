@@ -684,20 +684,26 @@ EOF
             ;;
         'int (redp2p_t *, const char *, unsigned short, redp2p_publisher_cb, void *)')
             BRIDGE_CALLBACKS="$BRIDGE_CALLBACKS
-typedef struct {
-    char text[16384];
-    size_t written;
-    int count;
-} bridge_redp2p_list_t;
+            typedef struct {
+                char text[16384];
+                size_t written;
+                int count;
+            } bridge_redp2p_list_t;
 
-static void bridge_redp2p_collect(const char *id, void *userdata) {
-    bridge_redp2p_list_t *list = userdata;
-    int result;
-    if (list == NULL || id == NULL || list->written >= sizeof(list->text)) return;
-    result = snprintf(list->text + list->written, sizeof(list->text) - list->written, \"%s\\\"%s\\\"\", list->count++ == 0 ? \"\" : \",\", id);
-    if (result < 0 || (size_t)result >= sizeof(list->text) - list->written) return;
-    list->written += (size_t)result;
-}"
+            /**
+            * Collects one publisher identifier for a generated callback result.
+            * @param id Publisher identifier.
+            * @param userdata Generated collection state.
+            * @return None.
+            */
+            static void bridge_redp2p_collect(const char *id, void *userdata) {
+                bridge_redp2p_list_t *list = userdata;
+                int result;
+                if (list == NULL || id == NULL || list->written >= sizeof(list->text)) return;
+                result = snprintf(list->text + list->written, sizeof(list->text) - list->written, \"%s\\\"%s\\\"\", list->count++ == 0 ? \"\" : \",\", id);
+                if (result < 0 || (size_t)result >= sizeof(list->text) - list->written) return;
+                list->written += (size_t)result;
+            }"
             cat >> "$BRIDGE_CASES_FILE" <<EOF
     if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
         uint64_t handle = 0;
@@ -789,6 +795,15 @@ $PROJECT_NATIVE_LIBRARY_LOAD
 }
 EOF
     cat <<EOF > "$NATIVE_DISPATCHER_FILE"
+/**
+ * native-bridge.c - Generated typed kclib JNI bridge.
+ * Summary: Invokes Clang-discovered manifest-selected public functions.
+ *
+ * Author: KaisarCode
+ * Website: https://kaisarcode.com
+ * License: https://www.gnu.org/licenses/gpl-3.0.html
+ */
+
 #include <jni.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -810,6 +825,11 @@ static const bridge_function_t bridge_functions[] = {$BRIDGE_FUNCTION_ROWS
 };
 static void *bridge_handles[256];
 
+/**
+ * Stores one native value behind a generated opaque handle.
+ * @param value Native value to store.
+ * @return Nonzero handle or zero when storage is unavailable.
+ */
 static uint64_t bridge_handle_put(void *value) {
     size_t index;
     if (value == NULL) return 0;
@@ -822,24 +842,52 @@ static uint64_t bridge_handle_put(void *value) {
     return 0;
 }
 
+/**
+ * Resolves one generated opaque handle.
+ * @param value Opaque handle value.
+ * @return Stored native value or NULL.
+ */
 static void *bridge_handle_get(uint64_t value) {
     if (value == 0 || value >= sizeof(bridge_handles) / sizeof(bridge_handles[0])) return NULL;
     return bridge_handles[value];
 }
 
+/**
+ * Forgets one generated opaque handle.
+ * @param value Opaque handle value.
+ * @return None.
+ */
 static void bridge_handle_drop(uint64_t value) {
     if (value > 0 && value < sizeof(bridge_handles) / sizeof(bridge_handles[0])) bridge_handles[value] = NULL;
 }
 
+/**
+ * Creates a Java string from one JSON response.
+ * @param env JNI environment.
+ * @param text JSON response text.
+ * @return New Java string.
+ */
 static jstring bridge_response(JNIEnv *env, const char *text) {
     return (*env)->NewStringUTF(env, text);
 }
 
+/**
+ * Tests whether JSON input is an empty argument array.
+ * @param text JSON text.
+ * @return Nonzero when the array is empty.
+ */
 static int bridge_json_empty(const char *text) {
     while (*text == ' ' || *text == '\\t' || *text == '\\n' || *text == '\\r') text++;
     return text[0] == '[' && text[1] == ']' && text[2] == '\\0';
 }
 
+/**
+ * Reads one string argument from a JSON array.
+ * @param text JSON text.
+ * @param index Argument position.
+ * @param out Receives allocated text.
+ * @return Nonzero on success.
+ */
 static int bridge_json_string(const char *text, int index, char **out) {
     const char *p = text;
     int current = 0;
@@ -875,6 +923,13 @@ static int bridge_json_string(const char *text, int index, char **out) {
     return 1;
 }
 
+/**
+ * Reads one unsigned integer from a JSON array.
+ * @param text JSON text.
+ * @param index Argument position.
+ * @param out Receives the integer.
+ * @return Nonzero on success.
+ */
 static int bridge_json_u64(const char *text, int index, uint64_t *out) {
     const char *p = text;
     int current = 0;
@@ -891,6 +946,13 @@ static int bridge_json_u64(const char *text, int index, uint64_t *out) {
     return end != p;
 }
 
+/**
+ * Reads one signed integer from a JSON array.
+ * @param text JSON text.
+ * @param index Argument position.
+ * @param out Receives the integer.
+ * @return Nonzero on success.
+ */
 static int bridge_json_i64(const char *text, int index, int64_t *out) {
     const char *p = text;
     int current = 0;
@@ -907,6 +969,12 @@ static int bridge_json_i64(const char *text, int index, int64_t *out) {
     return end != p;
 }
 
+/**
+ * Verifies the number of JSON array values.
+ * @param text JSON text.
+ * @param count Expected value count.
+ * @return Nonzero on success.
+ */
 static int bridge_json_done(const char *text, int count) {
     const char *p = text;
     int seen = 0;
@@ -920,18 +988,45 @@ static int bridge_json_done(const char *text, int count) {
     return *p == ']' && (count == 0 || seen == count - 1);
 }
 
+/**
+ * Writes one numeric JSON response.
+ * @param output Response buffer.
+ * @param cap Response buffer capacity.
+ * @param value Numeric result.
+ * @return None.
+ */
 static void bridge_result_number(char *output, size_t cap, double value) {
     snprintf(output, cap, "{\"result\":%.17g}", value);
 }
 
+/**
+ * Writes one null JSON response.
+ * @param output Response buffer.
+ * @param cap Response buffer capacity.
+ * @return None.
+ */
 static void bridge_result_null(char *output, size_t cap) {
     snprintf(output, cap, "{\"result\":null}");
 }
 
+/**
+ * Writes one opaque-handle JSON response.
+ * @param output Response buffer.
+ * @param cap Response buffer capacity.
+ * @param value Opaque handle.
+ * @return None.
+ */
 static void bridge_result_handle(char *output, size_t cap, uint64_t value) {
     snprintf(output, cap, "{\"result\":%llu}", (unsigned long long)value);
 }
 
+/**
+ * Writes one escaped string JSON response.
+ * @param output Response buffer.
+ * @param cap Response buffer capacity.
+ * @param value String result.
+ * @return None.
+ */
 static void bridge_result_string(char *output, size_t cap, const char *value) {
     size_t written = 0;
     const unsigned char *p = (const unsigned char *)(value == NULL ? "" : value);
@@ -943,6 +1038,14 @@ static void bridge_result_string(char *output, size_t cap, const char *value) {
     snprintf(output + written, cap - written, "\"}");
 }
 
+/**
+ * Writes one base64 JSON response for binary data.
+ * @param output Response buffer.
+ * @param cap Response buffer capacity.
+ * @param data Binary result.
+ * @param size Binary result size.
+ * @return None.
+ */
 static void bridge_result_binary(char *output, size_t cap, const void *data, size_t size) {
     static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     const unsigned char *p = data;
@@ -960,6 +1063,12 @@ static void bridge_result_binary(char *output, size_t cap, const void *data, siz
     snprintf(output + written, cap - written, "\"}");
 }
 
+/**
+ * Lists manifest-selected libraries for the internal transport.
+ * @param env JNI environment.
+ * @param type Native class.
+ * @return JSON library array.
+ */
 static jstring bridge_query_libraries(JNIEnv *env, jclass type) {
     char output[4096] = "[";
     size_t index;
@@ -971,6 +1080,13 @@ static jstring bridge_query_libraries(JNIEnv *env, jclass type) {
     return bridge_response(env, output);
 }
 
+/**
+ * Lists discovered functions for one selected library.
+ * @param env JNI environment.
+ * @param type Native class.
+ * @param library_name Requested library.
+ * @return JSON function array.
+ */
 static jstring bridge_query_functions(JNIEnv *env, jclass type, jstring library_name) {
     const char *library = (*env)->GetStringUTFChars(env, library_name, NULL);
     char output[16384] = "[";
@@ -988,6 +1104,15 @@ static jstring bridge_query_functions(JNIEnv *env, jclass type, jstring library_
     return bridge_response(env, output);
 }
 
+/**
+ * Dispatches one generated typed native call.
+ * @param env JNI environment.
+ * @param type Native class.
+ * @param library_name Selected library.
+ * @param function_name Discovered function.
+ * @param arguments JSON argument array.
+ * @return JSON call result.
+ */
 static jstring bridge_dispatch(JNIEnv *env, jclass type, jstring library_name, jstring function_name, jstring arguments) {
     const char *library = (*env)->GetStringUTFChars(env, library_name, NULL);
     const char *name = (*env)->GetStringUTFChars(env, function_name, NULL);
@@ -1004,6 +1129,12 @@ $(cat "$BRIDGE_CASES_FILE")
     return bridge_response(env, output);
 }
 
+/**
+ * Registers generated JNI methods for the internal transport.
+ * @param vm Java virtual machine.
+ * @param reserved Unused JNI value.
+ * @return JNI version or JNI_ERR.
+ */
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
     JNIEnv *env;
     jclass type;
