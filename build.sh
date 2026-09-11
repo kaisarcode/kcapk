@@ -403,328 +403,105 @@ discover_kclib_functions () {
     for DEP in $KCLIB_DEPS; do
         DEP_HEADER="$KCLIB_WORK_DIR/$DEP/$DEP.c/src/lib$DEP.h"
         DEP_AST="$KCLIB_WORK_DIR/$DEP.ast"
-        "$NDK_TOOLCHAIN/bin/aarch64-linux-android$MIN_SDK-clang" -fsyntax-only \
-            -I"$KCLIB_WORK_DIR/$DEP/$DEP.c/src" -Xclang -ast-dump=json -x c "$DEP_HEADER" > "$DEP_AST" 2>/dev/null \
-            || { echo "error: cannot inspect public header: $DEP_HEADER" >&2; exit 1; }
-        jq -r --arg library "$DEP" '
-            .. | objects
-            | select(.kind? == "FunctionDecl" and .loc != null and (.loc.includedFrom? == null))
-            | [$library, .name, .type.qualType] | @tsv
-        ' "$DEP_AST" >> "$BRIDGE_FUNCTIONS_FILE" \
-            || { echo "error: cannot read public declarations: $DEP_HEADER" >&2; exit 1; }
+        "$NDK_TOOLCHAIN/bin/aarch64-linux-android$MIN_SDK-clang" -fsyntax-only -I"$KCLIB_WORK_DIR/$DEP/$DEP.c/src" -Xclang -ast-dump=json -x c "$DEP_HEADER" > "$DEP_AST" 2>/dev/null || { echo "error: cannot inspect public header: $DEP_HEADER" >&2; exit 1; }
+        jq -c --arg library "$DEP" '
+            def clean: gsub("\\b(const|volatile|restrict)\\b"; "") | gsub("[[:space:]]+"; " ") | sub("^ "; "") | sub(" $"; "");
+            def aliases: reduce (.. | objects | select(.kind? == "TypedefDecl" and .name? and .type? and .type.qualType?)) as $d ({}; .[$d.name] = ($d.type.desugaredQualType // $d.type.qualType));
+            def type_model($types):
+                . as $source | ($source | clean) as $q
+                | if ($q | test("\\(\\*\\)")) then
+                    ($q | capture("^(?<return>.*) \\(\\*\\)\\((?<parameters>.*)\\)$")) as $callback
+                    | {qual: $source, canonical: $q, pointer_depth: 1, const: false, category: "callback", callback: {return: $callback.return, parameters: ($callback.parameters | if . == "void" or . == "" then [] else split(", ") end)}}
+                else
+                    ([$q | scan("\\*")] | length) as $depth
+                    | ($q | sub("\\*.*$"; "") | clean) as $base
+                    | ($types[$base] // $base) as $canonical_base
+                    | {qual: $source, canonical: ($canonical_base + (" *" * $depth)), pointer_depth: $depth, const: ($source | test("(^| )const ")), base: $canonical_base}
+                    | if $depth == 0 then .category = (if .base == "void" then "void" elif .base == "_Bool" or .base == "bool" then "bool" elif (.base | test("^(signed )?(char|short|int|long|long long)$")) then "signed" elif (.base | test("^unsigned (char|short|int|long|long long)$")) then "unsigned" elif .base == "float" or .base == "double" then "float" elif (.base | startswith("enum ")) then "enum" else "value" end)
+                    elif $depth == 1 and .base == "char" then .category = (if .const then "string" else "string_out" end)
+                    elif $depth == 1 and .base == "void" then .category = "void_pointer"
+                    elif $depth == 1 then .category = "opaque"
+                    elif $depth == 2 then .category = "opaque_out"
+                    else .category = "unsupported" end
+                end;
+            aliases as $types
+            | .. | objects | select(.kind? == "FunctionDecl" and .name? and .loc != null and (.loc.includedFrom? == null))
+            | (.type.qualType | capture("^(?<return>.*) \\(").return | type_model($types)) as $return_model
+            | {library: $library, name: .name, result: $return_model, parameters: [.inner[]? | select(.kind == "ParmVarDecl") | (.type.desugaredQualType // .type.qualType | type_model($types))]}
+        ' "$DEP_AST" >> "$BRIDGE_FUNCTIONS_FILE" || { echo "error: cannot read public declarations: $DEP_HEADER" >&2; exit 1; }
     done
 }
 
-# Emits one typed call from a Clang-discovered signature.
+# Stops generation for an unsupported typed declaration.
 # @param library Manifest-selected library name.
 # @param name Public function name.
-# @param signature Clang function type spelling.
-# @return 0 for a supported signature, otherwise 1.
-emit_bridge_case () {
-    library="$1"
-    name="$2"
-    signature="$3"
-    case "$signature" in
-        'redp2p_options_t (void)')
-            cat >> "$BRIDGE_CASES_FILE" <<EOF
-    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
-        redp2p_options_t *result;
-        uint64_t handle;
-        if (!bridge_json_empty(args)) { strcpy(output, "{\"error\":\"invalid arguments\"}"); return bridge_response(env, output); }
-        result = malloc(sizeof(*result));
-        if (result == NULL) { strcpy(output, "{\"error\":\"out of memory\"}"); return bridge_response(env, output); }
-        *result = $name();
-        handle = bridge_handle_put(result);
-        bridge_result_handle(output, sizeof(output), handle);
-        return bridge_response(env, output);
-    }
-EOF
-            ;;
-        'void (redp2p_options_t *)')
-            case "$name" in
-                *_free) BRIDGE_RELEASE_OPTIONS='free(arg_0); bridge_handle_drop(handle);' ;;
-                *) BRIDGE_RELEASE_OPTIONS='' ;;
-            esac
-            cat >> "$BRIDGE_CASES_FILE" <<EOF
-    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
-        uint64_t handle = 0;
-        redp2p_options_t *arg_0;
-        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_done(args, 1) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid options handle\"}"); return bridge_response(env, output); }
-        $name(arg_0);
-$BRIDGE_RELEASE_OPTIONS
-        bridge_result_null(output, sizeof(output));
-        return bridge_response(env, output);
-    }
-EOF
-            ;;
-        'int (redp2p_t **)')
-            cat >> "$BRIDGE_CASES_FILE" <<EOF
-    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
-        redp2p_t *result = NULL;
-        int rc;
-        uint64_t handle;
-        if (!bridge_json_empty(args)) { strcpy(output, "{\"error\":\"invalid arguments\"}"); return bridge_response(env, output); }
-        rc = $name(&result);
-        handle = result == NULL ? 0 : bridge_handle_put(result);
-        snprintf(output, sizeof(output), "{\"result\":%d,\"out\":%llu}", rc, (unsigned long long)handle);
-        return bridge_response(env, output);
-    }
-EOF
-            ;;
-        'int (redp2p_t *)'|'uint16_t (redp2p_t *)')
-            case "$name" in
-                *_close) BRIDGE_RELEASE_CONTEXT='bridge_handle_drop(handle);' ;;
-                *) BRIDGE_RELEASE_CONTEXT='' ;;
-            esac
-            cat >> "$BRIDGE_CASES_FILE" <<EOF
-    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
-        uint64_t handle = 0;
-        redp2p_t *arg_0;
-        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_done(args, 1) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid context handle\"}"); return bridge_response(env, output); }
-        bridge_result_number(output, sizeof(output), (double)$name(arg_0));
-$BRIDGE_RELEASE_CONTEXT
-        return bridge_response(env, output);
-    }
-EOF
-            ;;
-        'const char *(int)')
-            cat >> "$BRIDGE_CASES_FILE" <<EOF
-    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
-        int64_t arg_0 = 0;
-        if (!bridge_json_i64(args, 0, &arg_0) || !bridge_json_done(args, 1)) { strcpy(output, "{\"error\":\"invalid arguments\"}"); return bridge_response(env, output); }
-        bridge_result_string(output, sizeof(output), $name(arg_0));
-        return bridge_response(env, output);
-    }
-EOF
-            ;;
-        'const char *(redp2p_t *)')
-            cat >> "$BRIDGE_CASES_FILE" <<EOF
-    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
-        uint64_t handle = 0;
-        redp2p_t *arg_0;
-        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_done(args, 1) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid context handle\"}"); return bridge_response(env, output); }
-        bridge_result_string(output, sizeof(output), $name(arg_0));
-        return bridge_response(env, output);
-    }
-EOF
-            ;;
-        'int (const char *)')
-            cat >> "$BRIDGE_CASES_FILE" <<EOF
-    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
-        char *arg_0 = NULL;
-        if (!bridge_json_string(args, 0, &arg_0) || !bridge_json_done(args, 1)) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_0); return bridge_response(env, output); }
-        bridge_result_number(output, sizeof(output), (double)$name(arg_0));
-        free(arg_0);
-        return bridge_response(env, output);
-    }
-EOF
-            ;;
-        'int (redp2p_t *, const char *)')
-            cat >> "$BRIDGE_CASES_FILE" <<EOF
-    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
-        uint64_t handle = 0;
-        redp2p_t *arg_0;
-        char *arg_1 = NULL;
-        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_string(args, 1, &arg_1) || !bridge_json_done(args, 2) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_1); return bridge_response(env, output); }
-        bridge_result_number(output, sizeof(output), (double)$name(arg_0, arg_1));
-        free(arg_1);
-        return bridge_response(env, output);
-    }
-EOF
-            ;;
-        'int (redp2p_t *, size_t)'|'int (redp2p_t *, int)'|'int (redp2p_t *, unsigned short)')
-            cat >> "$BRIDGE_CASES_FILE" <<EOF
-    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
-        uint64_t handle = 0;
-        int64_t arg_1 = 0;
-        redp2p_t *arg_0;
-        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_i64(args, 1, &arg_1) || !bridge_json_done(args, 2) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid arguments\"}"); return bridge_response(env, output); }
-        bridge_result_number(output, sizeof(output), (double)$name(arg_0, arg_1));
-        return bridge_response(env, output);
-    }
-EOF
-            ;;
-        'int (redp2p_t *, int, int)')
-            cat >> "$BRIDGE_CASES_FILE" <<EOF
-    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
-        uint64_t handle = 0;
-        int64_t arg_1 = 0;
-        int64_t arg_2 = 0;
-        redp2p_t *arg_0;
-        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_i64(args, 1, &arg_1) || !bridge_json_i64(args, 2, &arg_2) || !bridge_json_done(args, 3) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid arguments\"}"); return bridge_response(env, output); }
-        bridge_result_number(output, sizeof(output), (double)$name(arg_0, arg_1, arg_2));
-        return bridge_response(env, output);
-    }
-EOF
-            ;;
-        'int (redp2p_t *, const char *, unsigned short)')
-            cat >> "$BRIDGE_CASES_FILE" <<EOF
-    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
-        uint64_t handle = 0;
-        redp2p_t *arg_0;
-        char *arg_1 = NULL;
-        int64_t arg_2 = 0;
-        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_string(args, 1, &arg_1) || !bridge_json_i64(args, 2, &arg_2) || !bridge_json_done(args, 3) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_1); return bridge_response(env, output); }
-        bridge_result_number(output, sizeof(output), (double)$name(arg_0, arg_1, arg_2));
-        free(arg_1);
-        return bridge_response(env, output);
-    }
-EOF
-            ;;
-        'int (redp2p_t *, const char *, unsigned short, const char *)')
-            cat >> "$BRIDGE_CASES_FILE" <<EOF
-    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
-        uint64_t handle = 0;
-        redp2p_t *arg_0;
-        char *arg_1 = NULL;
-        int64_t arg_2 = 0;
-        char *arg_3 = NULL;
-        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_string(args, 1, &arg_1) || !bridge_json_i64(args, 2, &arg_2) || !bridge_json_string(args, 3, &arg_3) || !bridge_json_done(args, 4) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_1); free(arg_3); return bridge_response(env, output); }
-        bridge_result_number(output, sizeof(output), (double)$name(arg_0, arg_1, arg_2, arg_3));
-        free(arg_1);
-        free(arg_3);
-        return bridge_response(env, output);
-    }
-EOF
-            ;;
-        'int (redp2p_t *, const char *, unsigned short, const char *, unsigned short)')
-            cat >> "$BRIDGE_CASES_FILE" <<EOF
-    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
-        uint64_t handle = 0;
-        redp2p_t *arg_0;
-        char *arg_1 = NULL;
-        int64_t arg_2 = 0;
-        char *arg_3 = NULL;
-        int64_t arg_4 = 0;
-        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_string(args, 1, &arg_1) || !bridge_json_i64(args, 2, &arg_2) || !bridge_json_string(args, 3, &arg_3) || !bridge_json_i64(args, 4, &arg_4) || !bridge_json_done(args, 5) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_1); free(arg_3); return bridge_response(env, output); }
-        bridge_result_number(output, sizeof(output), (double)$name(arg_0, arg_1, arg_2, arg_3, arg_4));
-        free(arg_1);
-        free(arg_3);
-        return bridge_response(env, output);
-    }
-EOF
-            ;;
-        'int (redp2p_t *, const char *, unsigned short, const char *, const char *, unsigned short)')
-            cat >> "$BRIDGE_CASES_FILE" <<EOF
-    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
-        uint64_t handle = 0;
-        redp2p_t *arg_0;
-        char *arg_1 = NULL;
-        int64_t arg_2 = 0;
-        char *arg_3 = NULL;
-        char *arg_4 = NULL;
-        int64_t arg_5 = 0;
-        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_string(args, 1, &arg_1) || !bridge_json_i64(args, 2, &arg_2) || !bridge_json_string(args, 3, &arg_3) || !bridge_json_string(args, 4, &arg_4) || !bridge_json_i64(args, 5, &arg_5) || !bridge_json_done(args, 6) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_1); free(arg_3); free(arg_4); return bridge_response(env, output); }
-        bridge_result_number(output, sizeof(output), (double)$name(arg_0, arg_1, arg_2, arg_3, arg_4, arg_5));
-        free(arg_1);
-        free(arg_3);
-        free(arg_4);
-        return bridge_response(env, output);
-    }
-EOF
-            ;;
-        'int (redp2p_t *, const char *, char *, size_t)')
-            cat >> "$BRIDGE_CASES_FILE" <<EOF
-    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
-        uint64_t handle = 0;
-        redp2p_t *arg_0;
-        char *arg_1 = NULL;
-        int64_t arg_2 = 0;
-        char *out_error;
-        int rc;
-        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_string(args, 1, &arg_1) || !bridge_json_i64(args, 2, &arg_2) || arg_2 < 1 || arg_2 > 65535 || !bridge_json_done(args, 3) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_1); return bridge_response(env, output); }
-        out_error = calloc((size_t)arg_2, 1);
-        if (out_error == NULL) { strcpy(output, "{\"error\":\"out of memory\"}"); free(arg_1); return bridge_response(env, output); }
-        rc = $name(arg_0, arg_1, out_error, (size_t)arg_2);
-        snprintf(output, sizeof(output), "{\"result\":%d,\"out\":\"%s\"}", rc, out_error);
-        free(arg_1);
-        free(out_error);
-        return bridge_response(env, output);
-    }
-EOF
-            ;;
-        'uint64_t (void)'|'uint32_t (void)'|'int (void)'|'unsigned int (void)'|'size_t (void)'|'double (void)'|'float (void)'|'void (void)')
-            cat >> "$BRIDGE_CASES_FILE" <<EOF
-    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
-        if (!bridge_json_empty(args)) { strcpy(output, "{\"error\":\"invalid arguments\"}"); return bridge_response(env, output); }
-        bridge_result_number(output, sizeof(output), (double)$name());
-        return bridge_response(env, output);
-    }
-EOF
-            ;;
-        'char *(const void *, size_t)')
-            cat >> "$BRIDGE_CASES_FILE" <<EOF
-    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
-        char *arg_0 = NULL;
-        uint64_t arg_1 = 0;
-        char *result;
-        if (!bridge_json_string(args, 0, &arg_0) || !bridge_json_u64(args, 1, &arg_1) || !bridge_json_done(args, 2)) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_0); return bridge_response(env, output); }
-        result = $name(arg_0, (size_t)arg_1);
-        free(arg_0);
-        bridge_result_string(output, sizeof(output), result);
-        free(result);
-        return bridge_response(env, output);
-    }
-EOF
-            ;;
-        'void *(const char *, size_t *)')
-            cat >> "$BRIDGE_CASES_FILE" <<EOF
-    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
-        char *arg_0 = NULL;
-        size_t out_size = 0;
-        void *result;
-        if (!bridge_json_string(args, 0, &arg_0) || !bridge_json_done(args, 1)) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_0); return bridge_response(env, output); }
-        result = $name(arg_0, &out_size);
-        free(arg_0);
-        bridge_result_binary(output, sizeof(output), result, out_size);
-        free(result);
-        return bridge_response(env, output);
-    }
-EOF
-            ;;
-        'int (redp2p_t *, const char *, unsigned short, redp2p_publisher_cb, void *)')
-            BRIDGE_CALLBACKS="$BRIDGE_CALLBACKS
-            typedef struct {
-                char text[16384];
-                size_t written;
-                int count;
-            } bridge_redp2p_list_t;
+# @param position Parameter or return position.
+# @param type Unsupported canonical type.
+# @return Does not return successfully.
+bridge_unsupported_type () {
+    echo "error: unsupported bridge type: library=$1 function=$2 $3 type=$4" >&2
+    exit 1
+}
 
-            /**
-            * Collects one publisher identifier for a generated callback result.
-            * @param id Publisher identifier.
-            * @param userdata Generated collection state.
-            * @return None.
-            */
-            static void bridge_redp2p_collect(const char *id, void *userdata) {
-                bridge_redp2p_list_t *list = userdata;
-                int result;
-                if (list == NULL || id == NULL || list->written >= sizeof(list->text)) return;
-                result = snprintf(list->text + list->written, sizeof(list->text) - list->written, \"%s\\\"%s\\\"\", list->count++ == 0 ? \"\" : \",\", id);
-                if (result < 0 || (size_t)result >= sizeof(list->text) - list->written) return;
-                list->written += (size_t)result;
-            }"
-            cat >> "$BRIDGE_CASES_FILE" <<EOF
+# Emits one typed call from structured Clang declaration metadata.
+# @param declaration One JSON declaration record.
+# @return 0 when the declaration is supported.
+emit_bridge_case () {
+    declaration="$1"
+    library=$(printf '%s' "$declaration" | jq -r '.library')
+    name=$(printf '%s' "$declaration" | jq -r '.name')
+    result_type=$(printf '%s' "$declaration" | jq -r '.result.qual')
+    result_category=$(printf '%s' "$declaration" | jq -r '.result.category')
+    case "$result_category" in void|bool|signed|unsigned|float|string|opaque|value) ;; *) bridge_unsupported_type "$library" "$name" return "$(printf '%s' "$declaration" | jq -r '.result.canonical')" ;; esac
+    count=$(printf '%s' "$declaration" | jq '.parameters | length')
+    declarations='' checks='' call_args='' cleanup='' js_index=0
+    index=0
+    while [ "$index" -lt "$count" ]; do
+        parameter=$(printf '%s' "$declaration" | jq -c ".parameters[$index]")
+        type=$(printf '%s' "$parameter" | jq -r '.qual')
+        canonical=$(printf '%s' "$parameter" | jq -r '.canonical')
+        category=$(printf '%s' "$parameter" | jq -r '.category')
+        case "$category" in
+            signed|enum|bool) declarations="$declarations        int64_t raw_$index = 0;\n        $type arg_$index;\n"; checks="$checks !bridge_json_i64(args, $js_index, &raw_$index) ||"; declarations="$declarations        arg_$index = ($type)raw_$index;\n"; call_args="$call_args${call_args:+, }arg_$index"; js_index=$((js_index + 1)) ;;
+            unsigned) declarations="$declarations        uint64_t raw_$index = 0;\n        $type arg_$index;\n        arg_$index = ($type)raw_$index;\n"; checks="$checks !bridge_json_u64(args, $js_index, &raw_$index) ||"; call_args="$call_args${call_args:+, }arg_$index"; js_index=$((js_index + 1)) ;;
+            float) declarations="$declarations        double raw_$index = 0;\n        $type arg_$index;\n        arg_$index = ($type)raw_$index;\n"; checks="$checks !bridge_json_double(args, $js_index, &raw_$index) ||"; call_args="$call_args${call_args:+, }arg_$index"; js_index=$((js_index + 1)) ;;
+            string) declarations="$declarations        char *arg_$index = NULL;\n"; checks="$checks !bridge_json_string(args, $js_index, &arg_$index) ||"; cleanup="$cleanup        free(arg_$index);\n"; call_args="$call_args${call_args:+, }arg_$index"; js_index=$((js_index + 1)) ;;
+            opaque) declarations="$declarations        uint64_t handle_$index = 0;\n        $type arg_$index;\n"; checks="$checks !bridge_json_u64(args, $js_index, &handle_$index) || (arg_$index = ($type)bridge_handle_get(handle_$index)) == NULL ||"; call_args="$call_args${call_args:+, }arg_$index"; js_index=$((js_index + 1)) ;;
+            opaque_out) pointee=$(printf '%s' "$type" | sed 's/[[:space:]]*\*\([[:space:]]*\)\?$//'); declarations="$declarations        $pointee arg_$index = NULL;\n        uint64_t out_$index;\n"; call_args="$call_args${call_args:+, }&arg_$index" ;;
+            string_out) [ "$index" -lt $((count - 1)) ] || bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical"; next_category=$(printf '%s' "$declaration" | jq -r ".parameters[$((index + 1))].category"); [ "$next_category" = unsigned ] || bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical"; declarations="$declarations        char *arg_$index = NULL;\n"; call_args="$call_args${call_args:+, }arg_$index" ;;
+            callback) callback_return=$(printf '%s' "$parameter" | jq -r '.callback.return'); callback_params=$(printf '%s' "$parameter" | jq -r '.callback.parameters | length'); if [ "$callback_return" != void ] || [ "$callback_params" -ne 2 ]; then bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical"; fi; declarations="$declarations        bridge_callback_list_t list_$index = {{0}, 0, 0};\n"; call_args="$call_args${call_args:+, }bridge_callback_collect, &list_$index"; index=$((index + 1)) ;;
+            void_pointer) bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical" ;;
+            *) bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical" ;;
+        esac
+        index=$((index + 1))
+    done
+    cat >> "$BRIDGE_CASES_FILE" <<EOF
     if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
-        uint64_t handle = 0;
-        redp2p_t *arg_0;
-        char *arg_1 = NULL;
-        int64_t arg_2 = 0;
-        bridge_redp2p_list_t list = {{0}, 0, 0};
-        int rc;
-        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_string(args, 1, &arg_1) || !bridge_json_i64(args, 2, &arg_2) || !bridge_json_done(args, 3) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_1); return bridge_response(env, output); }
-        rc = $name(arg_0, arg_1, (unsigned short)arg_2, bridge_redp2p_collect, &list);
-        free(arg_1);
-        snprintf(output, sizeof(output), "{\"result\":%d,\"items\":[%s]}", rc, list.text);
+$(printf '%b' "$declarations")        if (${checks:-0 || } !bridge_json_done(args, $js_index)) { strcpy(output, "{\\"error\\":\\"invalid arguments\\"}");
+$(printf '%b' "$cleanup")            return bridge_response(env, output); }
+EOF
+    if [ "$result_category" = void ]; then
+        printf '        %s(%s);\n' "$name" "$call_args" >> "$BRIDGE_CASES_FILE"
+        printf '        bridge_result_null(output, sizeof(output));\n' >> "$BRIDGE_CASES_FILE"
+    elif [ "$result_category" = string ]; then
+        printf '        %s result = %s(%s);\n        bridge_result_string(output, sizeof(output), result);\n' "$result_type" "$name" "$call_args" >> "$BRIDGE_CASES_FILE"
+    elif [ "$result_category" = opaque ]; then
+        printf '        %s result = %s(%s);\n        bridge_result_handle(output, sizeof(output), bridge_handle_put(result));\n' "$result_type" "$name" "$call_args" >> "$BRIDGE_CASES_FILE"
+    elif [ "$result_category" = value ]; then
+        printf '        %s *result = malloc(sizeof(*result));\n        if (result == NULL) { strcpy(output, "{\\"error\\":\\"out of memory\\"}"); return bridge_response(env, output); }\n        *result = %s(%s);\n        bridge_result_handle(output, sizeof(output), bridge_handle_put(result));\n' "$result_type" "$name" "$call_args" >> "$BRIDGE_CASES_FILE"
+    else
+        printf '        %s result = %s(%s);\n        bridge_result_number(output, sizeof(output), (double)result);\n' "$result_type" "$name" "$call_args" >> "$BRIDGE_CASES_FILE"
+    fi
+    printf '%b' "$cleanup" >> "$BRIDGE_CASES_FILE"
+    cat >> "$BRIDGE_CASES_FILE" <<'EOF'
         return bridge_response(env, output);
     }
 EOF
-            ;;
-        *)
-            echo "error: unsupported public signature: library=$library function=$name type=$signature" >&2
-            return 1
-            ;;
-    esac
+    BRIDGE_FUNCTION_ROWS="$BRIDGE_FUNCTION_ROWS
+    {\"$library\", \"$name\"},"
+    BRIDGE_FACADE_ROWS="$BRIDGE_FACADE_ROWS
+    bridge.$library = bridge.$library || {};
+    bridge.$library.$name = function () { var values = Array.prototype.slice.call(arguments); return call(\"$library\", \"$name\", values).then(function (value) { return Object.prototype.hasOwnProperty.call(value, \"out\") ? value.out : value.result; }); };"
 }
 
 # Generates JavaScript, JNI, and typed C calls from the discovered declarations.
@@ -736,18 +513,16 @@ generate_common_bridge () {
     BRIDGE_HEADERS=""
     BRIDGE_LIBRARIES=""
     BRIDGE_FUNCTION_ROWS=""
-    BRIDGE_CALLBACKS=""
+    BRIDGE_FACADE_ROWS=""
     for DEP in $KCLIB_DEPS; do
         BRIDGE_HEADERS="$BRIDGE_HEADERS
 $(printf '%s\n' "#include \"lib$DEP.h\"")"
         BRIDGE_LIBRARIES="$BRIDGE_LIBRARIES
     \"$DEP\","
     done
-    while IFS="$(printf '\t')" read -r library name signature; do
-        [ -n "$library" ] || continue
-        emit_bridge_case "$library" "$name" "$signature" || exit 1
-        BRIDGE_FUNCTION_ROWS="$BRIDGE_FUNCTION_ROWS
-    {\"$library\", \"$name\"},"
+    while IFS= read -r declaration; do
+        [ -n "$declaration" ] || continue
+        emit_bridge_case "$declaration"
     done < "$BRIDGE_FUNCTIONS_FILE"
     cat <<EOF > "$NATIVE_BRIDGE_FILE"
 package $PACKAGE_NAME;
@@ -810,7 +585,6 @@ EOF
 #include <stdlib.h>
 #include <string.h>
 $BRIDGE_HEADERS
-$BRIDGE_CALLBACKS
 
 typedef struct {
     const char *library;
@@ -824,6 +598,26 @@ static const bridge_function_t bridge_functions[] = {$BRIDGE_FUNCTION_ROWS
     {NULL, NULL}
 };
 static void *bridge_handles[256];
+
+typedef struct {
+    char text[16384];
+    size_t written;
+    int count;
+} bridge_callback_list_t;
+
+/**
+ * Collects one string callback value for a generated result.
+ * @param value Callback string value.
+ * @param userdata Generated callback collection.
+ * @return None.
+ */
+static void bridge_callback_collect(const char *value, void *userdata) {
+    bridge_callback_list_t *list = userdata;
+    int result;
+    if (list == NULL || value == NULL || list->written >= sizeof(list->text)) return;
+    result = snprintf(list->text + list->written, sizeof(list->text) - list->written, "%s%c%s%c", list->count++ == 0 ? "" : ",", 34, value, 34);
+    if (result >= 0 && (size_t)result < sizeof(list->text) - list->written) list->written += (size_t)result;
+}
 
 /**
  * Stores one native value behind a generated opaque handle.
@@ -1203,16 +997,7 @@ EOF
         });
     }
 EOF
-    while IFS="$(printf '\t')" read -r library name signature; do
-        [ -n "$library" ] || continue
-        printf '    bridge.%s = bridge.%s || {};\n' "$library" "$library" >> "$NATIVE_FACADE_FILE"
-        printf '\n    /**\n     * Calls one discovered C declaration.\n     * @return Promise resolving to the converted native result.\n     */\n' >> "$NATIVE_FACADE_FILE"
-        if [ "$signature" = 'int (redp2p_t *, const char *, unsigned short, redp2p_publisher_cb, void *)' ]; then
-            printf '    bridge.%s.%s = function (ctx, host, port, callback) { return call("%s", "%s", [ctx, host, port]).then(function (value) { value.items.forEach(callback); return value.result; }); };\n' "$library" "$name" "$library" "$name" >> "$NATIVE_FACADE_FILE"
-        else
-            printf '    bridge.%s.%s = function () { return call("%s", "%s", Array.prototype.slice.call(arguments)).then(function (value) { return Object.prototype.hasOwnProperty.call(value, "out") ? value.out : value.result; }); };\n' "$library" "$name" "$library" "$name" >> "$NATIVE_FACADE_FILE"
-        fi
-    done < "$BRIDGE_FUNCTIONS_FILE"
+    printf '%b\n' "$BRIDGE_FACADE_ROWS" >> "$NATIVE_FACADE_FILE"
     cat <<'EOF' >> "$NATIVE_FACADE_FILE"
     window.NativeBridge = bridge;
 })();
