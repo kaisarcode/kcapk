@@ -252,6 +252,9 @@ WEBVIEW_CLIENT_FILE="$SRC_DIR/TrustedWebViewClient.java"
 PROVISIONER_FILE="$SRC_DIR/Provisioner.java"
 NATIVE_BRIDGE_FILE="$SRC_DIR/NativeBridge.java"
 NATIVE_DISPATCHER_FILE="$BASE_DIR/native-bridge.c"
+NATIVE_FACADE_FILE="$ASSETS_DIR/www/js/native-bridge.js"
+BRIDGE_FUNCTIONS_FILE="$KCLIB_WORK_DIR/functions.tsv"
+BRIDGE_CASES_FILE="$KCLIB_WORK_DIR/cases.c"
 
 KCLIB_DIST_DIR="$(cfg kclib_dist_dir)"
 KCLIB_DIST_DIR="${KCLIB_DIST_DIR:-../../kclib/dist}"
@@ -358,17 +361,16 @@ valid_kclib_name () {
     esac
 }
 
-# Prepares implicit abi and declared kclib headers and Android shared libraries.
-# @return 0 when every effective dependency is ready.
+# Prepares declared kclib headers and Android shared libraries.
+# @return 0 when every declared dependency is ready.
 prepare_kclib_dependencies () {
     [ -d "$KCLIB_DIST_DIR" ] || { echo "error: kclib dist directory not found: $KCLIB_DIST_DIR" >&2; exit 1; }
 
     for DEP in $KCLIB_DEPS; do
         valid_kclib_name "$DEP" || { echo "error: invalid kclib name: $DEP" >&2; exit 1; }
-        [ "$DEP" != "abi" ] || { echo "error: abi is implicit and must not be listed in manifest.json:kclib" >&2; exit 1; }
     done
 
-    for DEP in abi $KCLIB_DEPS; do
+    for DEP in $KCLIB_DEPS; do
         DEP_DIST_DIR="$KCLIB_DIST_DIR/$DEP.c"
         DEP_ZIP="$DEP_DIST_DIR/source.zip"
         DEP_WORK_DIR="$KCLIB_WORK_DIR/$DEP"
@@ -376,11 +378,7 @@ prepare_kclib_dependencies () {
 
         [ -f "$DEP_ZIP" ] || { echo "error: kclib source package not found: $DEP_ZIP" >&2; exit 1; }
         unzip -q "$DEP_ZIP" -d "$DEP_WORK_DIR" || { echo "error: failed to extract: $DEP_ZIP" >&2; exit 1; }
-        if [ "$DEP" = "abi" ]; then
-            DEP_HEADER="$DEP_HEADER_DIR/abi.h"
-        else
-            DEP_HEADER="$DEP_HEADER_DIR/lib$DEP.h"
-        fi
+        DEP_HEADER="$DEP_HEADER_DIR/lib$DEP.h"
         [ -f "$DEP_HEADER" ] || { echo "error: kclib public header not found: $DEP_HEADER" >&2; exit 1; }
 
         for KCLIB_ARCH in aarch64 armv7; do
@@ -397,24 +395,354 @@ prepare_kclib_dependencies () {
     done
 }
 
-# Writes the Java and JNI sources for the manifest-limited kclib dispatcher.
-# @return 0 when both generated bridge sources are written.
-generate_common_bridge () {
-    BRIDGE_SELECTED_LIBRARIES=""
-    BRIDGE_SELECTED_LIBRARY_COUNT=0
-    PROJECT_NATIVE_LIBRARY_LOAD=""
+# Discovers selected public functions through the NDK Clang AST.
+# @return 0 when every selected declaration was discovered.
+discover_kclib_functions () {
+    : > "$BRIDGE_FUNCTIONS_FILE"
+    [ -x "$NDK_TOOLCHAIN/bin/aarch64-linux-android$MIN_SDK-clang" ] || { echo "error: Android NDK compiler not found under: $NDK_TOOLCHAIN" >&2; exit 1; }
     for DEP in $KCLIB_DEPS; do
-        BRIDGE_SELECTED_LIBRARIES="$BRIDGE_SELECTED_LIBRARIES
-    \"$DEP\","
-        BRIDGE_SELECTED_LIBRARY_COUNT=$((BRIDGE_SELECTED_LIBRARY_COUNT + 1))
+        DEP_HEADER="$KCLIB_WORK_DIR/$DEP/$DEP.c/src/lib$DEP.h"
+        DEP_AST="$KCLIB_WORK_DIR/$DEP.ast"
+        "$NDK_TOOLCHAIN/bin/aarch64-linux-android$MIN_SDK-clang" -fsyntax-only \
+            -I"$KCLIB_WORK_DIR/$DEP/$DEP.c/src" -Xclang -ast-dump=json -x c "$DEP_HEADER" > "$DEP_AST" 2>/dev/null \
+            || { echo "error: cannot inspect public header: $DEP_HEADER" >&2; exit 1; }
+        jq -r --arg library "$DEP" '
+            .. | objects
+            | select(.kind? == "FunctionDecl" and .loc != null and (.loc.includedFrom? == null))
+            | [$library, .name, .type.qualType] | @tsv
+        ' "$DEP_AST" >> "$BRIDGE_FUNCTIONS_FILE" \
+            || { echo "error: cannot read public declarations: $DEP_HEADER" >&2; exit 1; }
     done
-    if [ "$BRIDGE_SELECTED_LIBRARY_COUNT" -eq 0 ]; then
-        BRIDGE_SELECTED_LIBRARIES="    NULL,"
-    fi
-    if [ -f "$NATIVE_C_SOURCE" ]; then
-        PROJECT_NATIVE_LIBRARY_LOAD='        System.loadLibrary("projectbridge");'
-    fi
+}
 
+# Emits one typed call from a Clang-discovered signature.
+# @param library Manifest-selected library name.
+# @param name Public function name.
+# @param signature Clang function type spelling.
+# @return 0 for a supported signature, otherwise 1.
+emit_bridge_case () {
+    library="$1"
+    name="$2"
+    signature="$3"
+    case "$signature" in
+        'redp2p_options_t (void)')
+            cat >> "$BRIDGE_CASES_FILE" <<EOF
+    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
+        redp2p_options_t *result;
+        uint64_t handle;
+        if (!bridge_json_empty(args)) { strcpy(output, "{\"error\":\"invalid arguments\"}"); return bridge_response(env, output); }
+        result = malloc(sizeof(*result));
+        if (result == NULL) { strcpy(output, "{\"error\":\"out of memory\"}"); return bridge_response(env, output); }
+        *result = $name();
+        handle = bridge_handle_put(result);
+        bridge_result_handle(output, sizeof(output), handle);
+        return bridge_response(env, output);
+    }
+EOF
+            ;;
+        'void (redp2p_options_t *)')
+            case "$name" in
+                *_free) BRIDGE_RELEASE_OPTIONS='free(arg_0); bridge_handle_drop(handle);' ;;
+                *) BRIDGE_RELEASE_OPTIONS='' ;;
+            esac
+            cat >> "$BRIDGE_CASES_FILE" <<EOF
+    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
+        uint64_t handle = 0;
+        redp2p_options_t *arg_0;
+        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_done(args, 1) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid options handle\"}"); return bridge_response(env, output); }
+        $name(arg_0);
+$BRIDGE_RELEASE_OPTIONS
+        bridge_result_null(output, sizeof(output));
+        return bridge_response(env, output);
+    }
+EOF
+            ;;
+        'int (redp2p_t **)')
+            cat >> "$BRIDGE_CASES_FILE" <<EOF
+    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
+        redp2p_t *result = NULL;
+        int rc;
+        uint64_t handle;
+        if (!bridge_json_empty(args)) { strcpy(output, "{\"error\":\"invalid arguments\"}"); return bridge_response(env, output); }
+        rc = $name(&result);
+        handle = result == NULL ? 0 : bridge_handle_put(result);
+        snprintf(output, sizeof(output), "{\"result\":%d,\"out\":%llu}", rc, (unsigned long long)handle);
+        return bridge_response(env, output);
+    }
+EOF
+            ;;
+        'int (redp2p_t *)'|'uint16_t (redp2p_t *)')
+            case "$name" in
+                *_close) BRIDGE_RELEASE_CONTEXT='bridge_handle_drop(handle);' ;;
+                *) BRIDGE_RELEASE_CONTEXT='' ;;
+            esac
+            cat >> "$BRIDGE_CASES_FILE" <<EOF
+    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
+        uint64_t handle = 0;
+        redp2p_t *arg_0;
+        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_done(args, 1) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid context handle\"}"); return bridge_response(env, output); }
+        bridge_result_number(output, sizeof(output), (double)$name(arg_0));
+$BRIDGE_RELEASE_CONTEXT
+        return bridge_response(env, output);
+    }
+EOF
+            ;;
+        'const char *(int)')
+            cat >> "$BRIDGE_CASES_FILE" <<EOF
+    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
+        int64_t arg_0 = 0;
+        if (!bridge_json_i64(args, 0, &arg_0) || !bridge_json_done(args, 1)) { strcpy(output, "{\"error\":\"invalid arguments\"}"); return bridge_response(env, output); }
+        bridge_result_string(output, sizeof(output), $name(arg_0));
+        return bridge_response(env, output);
+    }
+EOF
+            ;;
+        'const char *(redp2p_t *)')
+            cat >> "$BRIDGE_CASES_FILE" <<EOF
+    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
+        uint64_t handle = 0;
+        redp2p_t *arg_0;
+        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_done(args, 1) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid context handle\"}"); return bridge_response(env, output); }
+        bridge_result_string(output, sizeof(output), $name(arg_0));
+        return bridge_response(env, output);
+    }
+EOF
+            ;;
+        'int (const char *)')
+            cat >> "$BRIDGE_CASES_FILE" <<EOF
+    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
+        char *arg_0 = NULL;
+        if (!bridge_json_string(args, 0, &arg_0) || !bridge_json_done(args, 1)) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_0); return bridge_response(env, output); }
+        bridge_result_number(output, sizeof(output), (double)$name(arg_0));
+        free(arg_0);
+        return bridge_response(env, output);
+    }
+EOF
+            ;;
+        'int (redp2p_t *, const char *)')
+            cat >> "$BRIDGE_CASES_FILE" <<EOF
+    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
+        uint64_t handle = 0;
+        redp2p_t *arg_0;
+        char *arg_1 = NULL;
+        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_string(args, 1, &arg_1) || !bridge_json_done(args, 2) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_1); return bridge_response(env, output); }
+        bridge_result_number(output, sizeof(output), (double)$name(arg_0, arg_1));
+        free(arg_1);
+        return bridge_response(env, output);
+    }
+EOF
+            ;;
+        'int (redp2p_t *, size_t)'|'int (redp2p_t *, int)'|'int (redp2p_t *, unsigned short)')
+            cat >> "$BRIDGE_CASES_FILE" <<EOF
+    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
+        uint64_t handle = 0;
+        int64_t arg_1 = 0;
+        redp2p_t *arg_0;
+        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_i64(args, 1, &arg_1) || !bridge_json_done(args, 2) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid arguments\"}"); return bridge_response(env, output); }
+        bridge_result_number(output, sizeof(output), (double)$name(arg_0, arg_1));
+        return bridge_response(env, output);
+    }
+EOF
+            ;;
+        'int (redp2p_t *, int, int)')
+            cat >> "$BRIDGE_CASES_FILE" <<EOF
+    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
+        uint64_t handle = 0;
+        int64_t arg_1 = 0;
+        int64_t arg_2 = 0;
+        redp2p_t *arg_0;
+        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_i64(args, 1, &arg_1) || !bridge_json_i64(args, 2, &arg_2) || !bridge_json_done(args, 3) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid arguments\"}"); return bridge_response(env, output); }
+        bridge_result_number(output, sizeof(output), (double)$name(arg_0, arg_1, arg_2));
+        return bridge_response(env, output);
+    }
+EOF
+            ;;
+        'int (redp2p_t *, const char *, unsigned short)')
+            cat >> "$BRIDGE_CASES_FILE" <<EOF
+    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
+        uint64_t handle = 0;
+        redp2p_t *arg_0;
+        char *arg_1 = NULL;
+        int64_t arg_2 = 0;
+        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_string(args, 1, &arg_1) || !bridge_json_i64(args, 2, &arg_2) || !bridge_json_done(args, 3) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_1); return bridge_response(env, output); }
+        bridge_result_number(output, sizeof(output), (double)$name(arg_0, arg_1, arg_2));
+        free(arg_1);
+        return bridge_response(env, output);
+    }
+EOF
+            ;;
+        'int (redp2p_t *, const char *, unsigned short, const char *)')
+            cat >> "$BRIDGE_CASES_FILE" <<EOF
+    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
+        uint64_t handle = 0;
+        redp2p_t *arg_0;
+        char *arg_1 = NULL;
+        int64_t arg_2 = 0;
+        char *arg_3 = NULL;
+        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_string(args, 1, &arg_1) || !bridge_json_i64(args, 2, &arg_2) || !bridge_json_string(args, 3, &arg_3) || !bridge_json_done(args, 4) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_1); free(arg_3); return bridge_response(env, output); }
+        bridge_result_number(output, sizeof(output), (double)$name(arg_0, arg_1, arg_2, arg_3));
+        free(arg_1);
+        free(arg_3);
+        return bridge_response(env, output);
+    }
+EOF
+            ;;
+        'int (redp2p_t *, const char *, unsigned short, const char *, unsigned short)')
+            cat >> "$BRIDGE_CASES_FILE" <<EOF
+    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
+        uint64_t handle = 0;
+        redp2p_t *arg_0;
+        char *arg_1 = NULL;
+        int64_t arg_2 = 0;
+        char *arg_3 = NULL;
+        int64_t arg_4 = 0;
+        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_string(args, 1, &arg_1) || !bridge_json_i64(args, 2, &arg_2) || !bridge_json_string(args, 3, &arg_3) || !bridge_json_i64(args, 4, &arg_4) || !bridge_json_done(args, 5) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_1); free(arg_3); return bridge_response(env, output); }
+        bridge_result_number(output, sizeof(output), (double)$name(arg_0, arg_1, arg_2, arg_3, arg_4));
+        free(arg_1);
+        free(arg_3);
+        return bridge_response(env, output);
+    }
+EOF
+            ;;
+        'int (redp2p_t *, const char *, unsigned short, const char *, const char *, unsigned short)')
+            cat >> "$BRIDGE_CASES_FILE" <<EOF
+    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
+        uint64_t handle = 0;
+        redp2p_t *arg_0;
+        char *arg_1 = NULL;
+        int64_t arg_2 = 0;
+        char *arg_3 = NULL;
+        char *arg_4 = NULL;
+        int64_t arg_5 = 0;
+        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_string(args, 1, &arg_1) || !bridge_json_i64(args, 2, &arg_2) || !bridge_json_string(args, 3, &arg_3) || !bridge_json_string(args, 4, &arg_4) || !bridge_json_i64(args, 5, &arg_5) || !bridge_json_done(args, 6) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_1); free(arg_3); free(arg_4); return bridge_response(env, output); }
+        bridge_result_number(output, sizeof(output), (double)$name(arg_0, arg_1, arg_2, arg_3, arg_4, arg_5));
+        free(arg_1);
+        free(arg_3);
+        free(arg_4);
+        return bridge_response(env, output);
+    }
+EOF
+            ;;
+        'int (redp2p_t *, const char *, char *, size_t)')
+            cat >> "$BRIDGE_CASES_FILE" <<EOF
+    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
+        uint64_t handle = 0;
+        redp2p_t *arg_0;
+        char *arg_1 = NULL;
+        int64_t arg_2 = 0;
+        char *out_error;
+        int rc;
+        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_string(args, 1, &arg_1) || !bridge_json_i64(args, 2, &arg_2) || arg_2 < 1 || arg_2 > 65535 || !bridge_json_done(args, 3) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_1); return bridge_response(env, output); }
+        out_error = calloc((size_t)arg_2, 1);
+        if (out_error == NULL) { strcpy(output, "{\"error\":\"out of memory\"}"); free(arg_1); return bridge_response(env, output); }
+        rc = $name(arg_0, arg_1, out_error, (size_t)arg_2);
+        snprintf(output, sizeof(output), "{\"result\":%d,\"out\":\"%s\"}", rc, out_error);
+        free(arg_1);
+        free(out_error);
+        return bridge_response(env, output);
+    }
+EOF
+            ;;
+        'uint64_t (void)'|'uint32_t (void)'|'int (void)'|'unsigned int (void)'|'size_t (void)'|'double (void)'|'float (void)'|'void (void)')
+            cat >> "$BRIDGE_CASES_FILE" <<EOF
+    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
+        if (!bridge_json_empty(args)) { strcpy(output, "{\"error\":\"invalid arguments\"}"); return bridge_response(env, output); }
+        bridge_result_number(output, sizeof(output), (double)$name());
+        return bridge_response(env, output);
+    }
+EOF
+            ;;
+        'char *(const void *, size_t)')
+            cat >> "$BRIDGE_CASES_FILE" <<EOF
+    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
+        char *arg_0 = NULL;
+        uint64_t arg_1 = 0;
+        char *result;
+        if (!bridge_json_string(args, 0, &arg_0) || !bridge_json_u64(args, 1, &arg_1) || !bridge_json_done(args, 2)) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_0); return bridge_response(env, output); }
+        result = $name(arg_0, (size_t)arg_1);
+        free(arg_0);
+        bridge_result_string(output, sizeof(output), result);
+        free(result);
+        return bridge_response(env, output);
+    }
+EOF
+            ;;
+        'void *(const char *, size_t *)')
+            cat >> "$BRIDGE_CASES_FILE" <<EOF
+    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
+        char *arg_0 = NULL;
+        size_t out_size = 0;
+        void *result;
+        if (!bridge_json_string(args, 0, &arg_0) || !bridge_json_done(args, 1)) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_0); return bridge_response(env, output); }
+        result = $name(arg_0, &out_size);
+        free(arg_0);
+        bridge_result_binary(output, sizeof(output), result, out_size);
+        free(result);
+        return bridge_response(env, output);
+    }
+EOF
+            ;;
+        'int (redp2p_t *, const char *, unsigned short, redp2p_publisher_cb, void *)')
+            BRIDGE_CALLBACKS="$BRIDGE_CALLBACKS
+typedef struct {
+    char text[16384];
+    size_t written;
+    int count;
+} bridge_redp2p_list_t;
+
+static void bridge_redp2p_collect(const char *id, void *userdata) {
+    bridge_redp2p_list_t *list = userdata;
+    int result;
+    if (list == NULL || id == NULL || list->written >= sizeof(list->text)) return;
+    result = snprintf(list->text + list->written, sizeof(list->text) - list->written, \"%s\\\"%s\\\"\", list->count++ == 0 ? \"\" : \",\", id);
+    if (result < 0 || (size_t)result >= sizeof(list->text) - list->written) return;
+    list->written += (size_t)result;
+}"
+            cat >> "$BRIDGE_CASES_FILE" <<EOF
+    if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
+        uint64_t handle = 0;
+        redp2p_t *arg_0;
+        char *arg_1 = NULL;
+        int64_t arg_2 = 0;
+        bridge_redp2p_list_t list = {{0}, 0, 0};
+        int rc;
+        if (!bridge_json_u64(args, 0, &handle) || !bridge_json_string(args, 1, &arg_1) || !bridge_json_i64(args, 2, &arg_2) || !bridge_json_done(args, 3) || (arg_0 = bridge_handle_get(handle)) == NULL) { strcpy(output, "{\"error\":\"invalid arguments\"}"); free(arg_1); return bridge_response(env, output); }
+        rc = $name(arg_0, arg_1, (unsigned short)arg_2, bridge_redp2p_collect, &list);
+        free(arg_1);
+        snprintf(output, sizeof(output), "{\"result\":%d,\"items\":[%s]}", rc, list.text);
+        return bridge_response(env, output);
+    }
+EOF
+            ;;
+        *)
+            echo "error: unsupported public signature: library=$library function=$name type=$signature" >&2
+            return 1
+            ;;
+    esac
+}
+
+# Generates JavaScript, JNI, and typed C calls from the discovered declarations.
+# @return 0 when generated sources are complete.
+generate_common_bridge () {
+    PROJECT_NATIVE_LIBRARY_LOAD=""
+    [ -f "$NATIVE_C_SOURCE" ] && PROJECT_NATIVE_LIBRARY_LOAD='        System.loadLibrary("projectbridge");'
+    : > "$BRIDGE_CASES_FILE"
+    BRIDGE_HEADERS=""
+    BRIDGE_LIBRARIES=""
+    BRIDGE_FUNCTION_ROWS=""
+    BRIDGE_CALLBACKS=""
+    for DEP in $KCLIB_DEPS; do
+        BRIDGE_HEADERS="$BRIDGE_HEADERS
+$(printf '%s\n' "#include \"lib$DEP.h\"")"
+        BRIDGE_LIBRARIES="$BRIDGE_LIBRARIES
+    \"$DEP\","
+    done
+    while IFS="$(printf '\t')" read -r library name signature; do
+        [ -n "$library" ] || continue
+        emit_bridge_case "$library" "$name" "$signature" || exit 1
+        BRIDGE_FUNCTION_ROWS="$BRIDGE_FUNCTION_ROWS
+    {\"$library\", \"$name\"},"
+    done < "$BRIDGE_FUNCTIONS_FILE"
     cat <<EOF > "$NATIVE_BRIDGE_FILE"
 package $PACKAGE_NAME;
 
@@ -422,9 +750,6 @@ import android.content.Context;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 
-/**
- * Provides trusted JavaScript access to manifest-selected kclib functions.
- */
 public final class NativeBridge {
     static {
         System.loadLibrary("kcapkbridge");
@@ -433,406 +758,377 @@ $PROJECT_NATIVE_LIBRARY_LOAD
 
     private final JSBridge jsBridge;
 
-    /**
-     * Connects the generated native dispatcher to the application library directory.
-     * @param context Android application context.
-     * @param webView Application WebView.
-     * @param jsBridge Shared trusted-origin gate.
-     * @return None.
-     */
     public NativeBridge(Context context, WebView webView, JSBridge jsBridge) {
         this.jsBridge = jsBridge;
-        nativeInit(context.getApplicationInfo().nativeLibraryDir);
     }
 
-    /**
-     * Calls one known function in a manifest-selected kclib.
-     * @param token Trusted bridge capability token.
-     * @param library Selected kclib name.
-     * @param function Public function name from libabi metadata.
-     * @param args JSON argument array.
-     * @return JSON result or explicit error.
-     */
     @JavascriptInterface
-    public String callNative(String token, String library, String function, String args) {
+    public String dispatch(String token, String library, String function, String args) {
         if (!jsBridge.isTrustedCall(token)) {
             return "{\"error\":\"unauthorized\"}";
         }
         if (library == null || function == null) {
             return "{\"error\":\"invalid arguments\"}";
         }
-        return nativeCall(library, function, args == null ? "[]" : args);
+        return nativeDispatch(library, function, args == null ? "[]" : args);
     }
 
-    /**
-     * Lists only the optional kclibs selected by the application manifest.
-     * @param token Trusted bridge capability token.
-     * @return JSON library array, or an empty array for an untrusted caller.
-     */
     @JavascriptInterface
     public String queryLibraries(String token) {
-        if (!jsBridge.isTrustedCall(token)) {
-            return "[]";
-        }
-        return nativeQueryLibraries();
+        return jsBridge.isTrustedCall(token) ? nativeQueryLibraries() : "[]";
     }
 
-    /**
-     * Lists libabi-known functions for one selected optional kclib.
-     * @param token Trusted bridge capability token.
-     * @param library Selected kclib name.
-     * @return JSON function array, or an empty array for an invalid caller.
-     */
     @JavascriptInterface
     public String queryFunctions(String token, String library) {
-        if (!jsBridge.isTrustedCall(token)) {
-            return "[]";
-        }
-        if (library == null) {
-            return "[]";
-        }
-        return nativeQueryFunctions(library);
+        return jsBridge.isTrustedCall(token) && library != null ? nativeQueryFunctions(library) : "[]";
     }
 
-    private static native String nativeInit(String libraryDir);
-    private static native String nativeCall(String library, String function, String args);
+    private static native String nativeDispatch(String library, String function, String args);
     private static native String nativeQueryLibraries();
     private static native String nativeQueryFunctions(String library);
 }
 EOF
-
     cat <<EOF > "$NATIVE_DISPATCHER_FILE"
-/**
- * native-bridge.c - Generated manifest-limited kclib JNI dispatcher
- * Summary: Resolves and invokes libabi-described selected native functions.
- *
- * Author: KaisarCode
- * Website: https://kaisarcode.com
- * License: GNU General Public License v3.0
- */
-
 #include <jni.h>
-#include <dlfcn.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+$BRIDGE_HEADERS
+$BRIDGE_CALLBACKS
 
-#include "abi.h"
+typedef struct {
+    const char *library;
+    const char *name;
+} bridge_function_t;
 
-#define BRIDGE_MAX_PATH 1024
+static const char *const bridge_libraries[] = {$BRIDGE_LIBRARIES
+    NULL
+};
+static const bridge_function_t bridge_functions[] = {$BRIDGE_FUNCTION_ROWS
+    {NULL, NULL}
+};
+static void *bridge_handles[256];
 
-static const char *const bridge_selected_libraries[] = {
-$BRIDGE_SELECTED_LIBRARIES};
-
-static const size_t bridge_selected_library_count = $BRIDGE_SELECTED_LIBRARY_COUNT;
-static char bridge_library_dir[BRIDGE_MAX_PATH];
-
-/**
- * Tests whether a requested library is an optional manifest dependency.
- * @param library Requested library name.
- * @return Nonzero when the library is selected.
- */
-static int bridge_library_selected(const char *library) {
+static uint64_t bridge_handle_put(void *value) {
     size_t index;
-
-    if (library == NULL) {
-        return 0;
-    }
-    for (index = 0; index < bridge_selected_library_count; index++) {
-        if (strcmp(library, bridge_selected_libraries[index]) == 0) {
-            return 1;
+    if (value == NULL) return 0;
+    for (index = 1; index < sizeof(bridge_handles) / sizeof(bridge_handles[0]); index++) {
+        if (bridge_handles[index] == NULL) {
+            bridge_handles[index] = value;
+            return index;
         }
     }
     return 0;
 }
 
-/**
- * Creates a Java string containing a fixed JSON response.
- * @param env JNI environment.
- * @param response JSON response text.
- * @return Newly allocated Java string.
- */
-static jstring bridge_response(JNIEnv *env, const char *response) {
-    return (*env)->NewStringUTF(env, response);
+static void *bridge_handle_get(uint64_t value) {
+    if (value == 0 || value >= sizeof(bridge_handles) / sizeof(bridge_handles[0])) return NULL;
+    return bridge_handles[value];
 }
 
-/**
- * Verifies that a call provides an empty JSON argument array.
- * @param args JSON argument text.
- * @return Nonzero for an empty JSON array with optional surrounding whitespace.
- */
-static int bridge_empty_arguments(const char *args) {
-    while (*args == ' ' || *args == '\t' || *args == '\n' || *args == '\r') {
-        args++;
-    }
-    if (args[0] != '[' || args[1] != ']') {
-        return 0;
-    }
-    args += 2;
-    while (*args == ' ' || *args == '\t' || *args == '\n' || *args == '\r') {
-        args++;
-    }
-    return *args == '\0';
+static void bridge_handle_drop(uint64_t value) {
+    if (value > 0 && value < sizeof(bridge_handles) / sizeof(bridge_handles[0])) bridge_handles[value] = NULL;
 }
 
-/**
- * Calls a no-argument function using its libabi return category.
- * @param function Native function pointer.
- * @param type libabi return category.
- * @param output Result response buffer.
- * @param output_size Result response buffer size.
- * @return 0 when the call was made, or -1 for an unsupported category.
- */
-static int bridge_invoke_noargs(void *function, kc_abi_type_t type, char *output, size_t output_size) {
-    switch (type) {
-    case KC_ABI_TYPE_VOID:
-        ((void (*)(void))function)();
-        snprintf(output, output_size, "{\"result\":null}");
-        return 0;
-    case KC_ABI_TYPE_INT:
-    case KC_ABI_TYPE_ENUM:
-        snprintf(output, output_size, "{\"result\":%d}", ((int (*)(void))function)());
-        return 0;
-    case KC_ABI_TYPE_UINT:
-        snprintf(output, output_size, "{\"result\":%u}", ((unsigned int (*)(void))function)());
-        return 0;
-    case KC_ABI_TYPE_U16:
-        snprintf(output, output_size, "{\"result\":%u}", (unsigned int)((uint16_t (*)(void))function)());
-        return 0;
-    case KC_ABI_TYPE_U64:
-        snprintf(output, output_size, "{\"result\":%llu}", (unsigned long long)((uint64_t (*)(void))function)());
-        return 0;
-    case KC_ABI_TYPE_SIZE:
-        snprintf(output, output_size, "{\"result\":%llu}", (unsigned long long)((size_t (*)(void))function)());
-        return 0;
-    case KC_ABI_TYPE_LONG:
-        snprintf(output, output_size, "{\"result\":%ld}", ((long (*)(void))function)());
-        return 0;
-    case KC_ABI_TYPE_POINTER:
-        snprintf(output, output_size, "{\"result\":%llu}",
-            (unsigned long long)(uintptr_t)((void *(*)(void))function)());
-        return 0;
-    default:
-        return -1;
-    }
+static jstring bridge_response(JNIEnv *env, const char *text) {
+    return (*env)->NewStringUTF(env, text);
 }
 
-/**
- * Initializes the fixed application native-library directory.
- * @param env JNI environment.
- * @param type NativeBridge class.
- * @param directory Installed application library directory.
- * @return JSON initialization result.
- */
-static jstring bridge_init(JNIEnv *env, jclass type, jstring directory) {
-    const char *value;
+static int bridge_json_empty(const char *text) {
+    while (*text == ' ' || *text == '\\t' || *text == '\\n' || *text == '\\r') text++;
+    return text[0] == '[' && text[1] == ']' && text[2] == '\\0';
+}
 
-    (void)type;
-    value = (*env)->GetStringUTFChars(env, directory, NULL);
-    if (value == NULL || strlen(value) >= sizeof(bridge_library_dir)) {
-        if (value != NULL) {
-            (*env)->ReleaseStringUTFChars(env, directory, value);
+static int bridge_json_string(const char *text, int index, char **out) {
+    const char *p = text;
+    int current = 0;
+    size_t size = 0;
+    char *value;
+    while (*p && *p != '[') p++;
+    if (*p++ != '[') return 0;
+    while (*p == ' ' || *p == '\\t' || *p == '\\n' || *p == '\\r') p++;
+    while (current < index) {
+        if (*p != '\"') return 0;
+        p++;
+        while (*p && *p != '\"') { if (*p++ == '\\\\' && *p) p++; }
+        if (*p++ != '\"') return 0;
+        while (*p == ' ' || *p == '\\t') p++;
+        if (*p++ != ',') return 0;
+        while (*p == ' ' || *p == '\\t' || *p == '\\n' || *p == '\\r') p++;
+        current++;
+    }
+    if (*p++ != '\"') return 0;
+    {
+        const char *start = p;
+        while (*p && *p != '\"') { if (*p == '\\\\' && p[1]) p++; p++; }
+        if (*p != '\"') return 0;
+        value = malloc((size_t)(p - start) + 1);
+        if (value == NULL) return 0;
+        while (start < p) {
+            if (*start == '\\\\' && start + 1 < p) start++;
+            value[size++] = *start++;
         }
-        return bridge_response(env, "{\"error\":\"invalid library directory\"}");
+        value[size] = '\\0';
     }
-    strcpy(bridge_library_dir, value);
-    (*env)->ReleaseStringUTFChars(env, directory, value);
-    return bridge_response(env, "{}");
+    *out = value;
+    return 1;
 }
 
-/**
- * Returns a JSON list of manifest-selected optional libraries.
- * @param env JNI environment.
- * @param type NativeBridge class.
- * @return JSON library array.
- */
+static int bridge_json_u64(const char *text, int index, uint64_t *out) {
+    const char *p = text;
+    int current = 0;
+    char *end;
+    while (*p && *p != '[') p++;
+    if (*p++ != '[') return 0;
+    while (*p == ' ' || *p == '\\t' || *p == '\\n' || *p == '\\r') p++;
+    while (current < index) {
+        while (*p && *p != ',' && *p != ']') p++;
+        if (*p++ != ',') return 0;
+        current++;
+    }
+    *out = strtoull(p, &end, 10);
+    return end != p;
+}
+
+static int bridge_json_i64(const char *text, int index, int64_t *out) {
+    const char *p = text;
+    int current = 0;
+    char *end;
+    while (*p && *p != '[') p++;
+    if (*p++ != '[') return 0;
+    while (*p == ' ' || *p == '\\t' || *p == '\\n' || *p == '\\r') p++;
+    while (current < index) {
+        while (*p && *p != ',' && *p != ']') p++;
+        if (*p++ != ',') return 0;
+        current++;
+    }
+    *out = strtoll(p, &end, 10);
+    return end != p;
+}
+
+static int bridge_json_done(const char *text, int count) {
+    const char *p = text;
+    int seen = 0;
+    while (*p && *p != '[') p++;
+    if (*p++ != '[') return 0;
+    while (*p && *p != ']') {
+        if (*p == '\"') { p++; while (*p && *p != '\"') { if (*p++ == '\\\\' && *p) p++; } if (*p) p++; }
+        else p++;
+        if (*p == ',') seen++;
+    }
+    return *p == ']' && (count == 0 || seen == count - 1);
+}
+
+static void bridge_result_number(char *output, size_t cap, double value) {
+    snprintf(output, cap, "{\"result\":%.17g}", value);
+}
+
+static void bridge_result_null(char *output, size_t cap) {
+    snprintf(output, cap, "{\"result\":null}");
+}
+
+static void bridge_result_handle(char *output, size_t cap, uint64_t value) {
+    snprintf(output, cap, "{\"result\":%llu}", (unsigned long long)value);
+}
+
+static void bridge_result_string(char *output, size_t cap, const char *value) {
+    size_t written = 0;
+    const unsigned char *p = (const unsigned char *)(value == NULL ? "" : value);
+    written += (size_t)snprintf(output + written, cap - written, "{\"result\":\"");
+    while (*p && written + 8 < cap) {
+        if (*p == '\\"' || *p == '\\\\') output[written++] = '\\\\';
+        output[written++] = (char)*p++;
+    }
+    snprintf(output + written, cap - written, "\"}");
+}
+
+static void bridge_result_binary(char *output, size_t cap, const void *data, size_t size) {
+    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const unsigned char *p = data;
+    size_t index = 0;
+    size_t written = (size_t)snprintf(output, cap, "{\"result\":\"");
+    while (index < size && written + 6 < cap) {
+        unsigned int a = p[index++];
+        unsigned int b = index < size ? p[index++] : 0;
+        unsigned int c = index < size ? p[index++] : 0;
+        output[written++] = alphabet[a >> 2];
+        output[written++] = alphabet[((a & 3) << 4) | (b >> 4)];
+        output[written++] = index - 1 < size ? alphabet[((b & 15) << 2) | (c >> 6)] : '=';
+        output[written++] = index < size ? alphabet[c & 63] : '=';
+    }
+    snprintf(output + written, cap - written, "\"}");
+}
+
 static jstring bridge_query_libraries(JNIEnv *env, jclass type) {
-    char output[4096];
+    char output[4096] = "[";
     size_t index;
-    size_t written;
-
     (void)type;
-    written = 1;
-    output[0] = '[';
-    for (index = 0; index < bridge_selected_library_count; index++) {
-        int result = snprintf(output + written, sizeof(output) - written, "%s\"%s\"",
-            index == 0 ? "" : ",", bridge_selected_libraries[index]);
-        if (result < 0 || (size_t)result >= sizeof(output) - written) {
-            return bridge_response(env, "[]");
-        }
-        written += (size_t)result;
+    for (index = 0; bridge_libraries[index] != NULL; index++) {
+        snprintf(output + strlen(output), sizeof(output) - strlen(output), "%s\"%s\"", index == 0 ? "" : ",", bridge_libraries[index]);
     }
-    output[written++] = ']';
-    output[written] = '\0';
+    strcat(output, "]");
     return bridge_response(env, output);
 }
 
-/**
- * Lists libabi metadata for one manifest-selected library.
- * @param env JNI environment.
- * @param type NativeBridge class.
- * @param library_name Selected library name.
- * @return JSON function array.
- */
 static jstring bridge_query_functions(JNIEnv *env, jclass type, jstring library_name) {
-    const char *library;
-    const kc_abi_library_t *descriptor;
-    char output[16384];
+    const char *library = (*env)->GetStringUTFChars(env, library_name, NULL);
+    char output[16384] = "[";
     size_t index;
-    size_t written;
-
+    int count = 0;
     (void)type;
-    library = (*env)->GetStringUTFChars(env, library_name, NULL);
-    if (library == NULL || !bridge_library_selected(library)) {
-        if (library != NULL) {
-            (*env)->ReleaseStringUTFChars(env, library_name, library);
+    if (library == NULL) return bridge_response(env, "[]");
+    for (index = 0; bridge_functions[index].library != NULL; index++) {
+        if (strcmp(library, bridge_functions[index].library) == 0) {
+            snprintf(output + strlen(output), sizeof(output) - strlen(output), "%s\"%s\"", count++ == 0 ? "" : ",", bridge_functions[index].name);
         }
-        return bridge_response(env, "[]");
     }
-    descriptor = kc_abi_library(library);
     (*env)->ReleaseStringUTFChars(env, library_name, library);
-    if (descriptor == NULL) {
-        return bridge_response(env, "[]");
-    }
-    written = 1;
-    output[0] = '[';
-    for (index = 0; index < descriptor->function_count; index++) {
-        int result = snprintf(output + written, sizeof(output) - written, "%s\"%s\"",
-            index == 0 ? "" : ",", descriptor->functions[index].name);
-        if (result < 0 || (size_t)result >= sizeof(output) - written) {
-            return bridge_response(env, "[]");
-        }
-        written += (size_t)result;
-    }
-    output[written++] = ']';
-    output[written] = '\0';
+    strcat(output, "]");
     return bridge_response(env, output);
 }
 
-/**
- * Resolves and invokes a selected libabi-described no-argument function.
- * @param env JNI environment.
- * @param type NativeBridge class.
- * @param library_name Selected library name.
- * @param function_name Public function name.
- * @param arguments JSON argument array.
- * @return JSON result or explicit dispatch error.
- */
-static jstring bridge_call(JNIEnv *env, jclass type, jstring library_name, jstring function_name, jstring arguments) {
-    const char *library;
-    const char *name;
-    const char *args;
-    const kc_abi_function_t *descriptor;
-    char path[BRIDGE_MAX_PATH];
-    char output[160];
-    void *handle;
-    void *function;
-
+static jstring bridge_dispatch(JNIEnv *env, jclass type, jstring library_name, jstring function_name, jstring arguments) {
+    const char *library = (*env)->GetStringUTFChars(env, library_name, NULL);
+    const char *name = (*env)->GetStringUTFChars(env, function_name, NULL);
+    const char *args = (*env)->GetStringUTFChars(env, arguments, NULL);
+    char output[65536] = "{\"error\":\"unknown function\"}";
     (void)type;
-    library = (*env)->GetStringUTFChars(env, library_name, NULL);
-    name = (*env)->GetStringUTFChars(env, function_name, NULL);
-    args = (*env)->GetStringUTFChars(env, arguments, NULL);
-    if (library == NULL || name == NULL || args == NULL) {
-        output[0] = '\0';
-        strcpy(output, "{\"error\":\"invalid arguments\"}");
-        goto done;
+    if (library == NULL || name == NULL || args == NULL) strcpy(output, "{\"error\":\"invalid arguments\"}");
+    else {
+$(cat "$BRIDGE_CASES_FILE")
     }
-    if (!bridge_library_selected(library)) {
-        strcpy(output, "{\"error\":\"undeclared library\"}");
-        goto done;
-    }
-    descriptor = kc_abi_function(library, name);
-    if (descriptor == NULL) {
-        strcpy(output, "{\"error\":\"unknown function\"}");
-        goto done;
-    }
-    if (descriptor->param_count != 0 || !bridge_empty_arguments(args)) {
-        strcpy(output, "{\"error\":\"unsupported function arguments\"}");
-        goto done;
-    }
-    if (snprintf(path, sizeof(path), "%s/lib%s.so", bridge_library_dir, library) >= (int)sizeof(path)) {
-        strcpy(output, "{\"error\":\"library path too long\"}");
-        goto done;
-    }
-    handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
-    if (handle == NULL) {
-        strcpy(output, "{\"error\":\"selected library unavailable\"}");
-        goto done;
-    }
-    function = dlsym(handle, name);
-    if (function == NULL) {
-        dlclose(handle);
-        strcpy(output, "{\"error\":\"known symbol unavailable\"}");
-        goto done;
-    }
-    if (bridge_invoke_noargs(function, descriptor->ret, output, sizeof(output)) != 0) {
-        strcpy(output, "{\"error\":\"unsupported return type\"}");
-    }
-    dlclose(handle);
-
-done:
-    if (library != NULL) {
-        (*env)->ReleaseStringUTFChars(env, library_name, library);
-    }
-    if (name != NULL) {
-        (*env)->ReleaseStringUTFChars(env, function_name, name);
-    }
-    if (args != NULL) {
-        (*env)->ReleaseStringUTFChars(env, arguments, args);
-    }
+    if (library != NULL) (*env)->ReleaseStringUTFChars(env, library_name, library);
+    if (name != NULL) (*env)->ReleaseStringUTFChars(env, function_name, name);
+    if (args != NULL) (*env)->ReleaseStringUTFChars(env, arguments, args);
     return bridge_response(env, output);
 }
 
-/**
- * Registers generated native methods for the generated NativeBridge class.
- * @param vm Java virtual machine.
- * @param reserved Unused JNI value.
- * @return JNI version when registration succeeds, or JNI_ERR otherwise.
- */
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
     JNIEnv *env;
     jclass type;
     static const JNINativeMethod methods[] = {
-        {"nativeInit", "(Ljava/lang/String;)Ljava/lang/String;", (void *)bridge_init},
-        {"nativeCall", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", (void *)bridge_call},
+        {"nativeDispatch", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", (void *)bridge_dispatch},
         {"nativeQueryLibraries", "()Ljava/lang/String;", (void *)bridge_query_libraries},
         {"nativeQueryFunctions", "(Ljava/lang/String;)Ljava/lang/String;", (void *)bridge_query_functions}
     };
-
     (void)reserved;
-    if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
-        return JNI_ERR;
-    }
+    if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;
     type = (*env)->FindClass(env, "$PACKAGE_SUBPATH/NativeBridge");
-    if (type == NULL || (*env)->RegisterNatives(env, type, methods,
-            (jint)(sizeof(methods) / sizeof(methods[0]))) != JNI_OK) {
-        return JNI_ERR;
-    }
+    if (type == NULL || (*env)->RegisterNatives(env, type, methods, (jint)(sizeof(methods) / sizeof(methods[0]))) != JNI_OK) return JNI_ERR;
     return JNI_VERSION_1_6;
 }
 EOF
+    cat <<'EOF' > "$NATIVE_FACADE_FILE"
+/**
+ * native-bridge.js - Generated kclib facade.
+ * Summary: Exposes only typed functions discovered from manifest-selected public headers.
+ * Author: KaisarCode
+ * Website: https://kaisarcode.com
+ * License: https://www.gnu.org/licenses/gpl-3.0.html
+ */
+
+(function () {
+    'use strict';
+    var transport = window.__kcNativeTransport;
+    var bridge = {};
+
+    /**
+     * Sends one facade call through the trusted internal transport.
+     * @param library Selected kclib namespace.
+     * @param name Discovered C function name.
+     * @param args JavaScript arguments.
+     * @return Promise resolving to the internal typed result.
+     */
+    function call(library, name, args) {
+        return new Promise(function (resolve, reject) {
+
+            /**
+             * Delays dispatch until the trusted page token is available.
+             * @return None.
+             */
+            function dispatch() {
+                var token = window.__kcBridgeToken;
+                var response;
+                var value;
+                if (!token) {
+                    window.setTimeout(dispatch, 0);
+                    return;
+                }
+                try {
+                    response = transport.dispatch(token, library, name, JSON.stringify(args));
+                    value = JSON.parse(response);
+                } catch (error) {
+                    reject(error);
+                    return;
+                }
+                if (value.error) {
+                    reject(new Error(value.error));
+                    return;
+                }
+                resolve(value);
+            }
+            dispatch();
+        });
+    }
+EOF
+    while IFS="$(printf '\t')" read -r library name signature; do
+        [ -n "$library" ] || continue
+        printf '    bridge.%s = bridge.%s || {};\n' "$library" "$library" >> "$NATIVE_FACADE_FILE"
+        printf '\n    /**\n     * Calls one discovered C declaration.\n     * @return Promise resolving to the converted native result.\n     */\n' >> "$NATIVE_FACADE_FILE"
+        if [ "$signature" = 'int (redp2p_t *, const char *, unsigned short, redp2p_publisher_cb, void *)' ]; then
+            printf '    bridge.%s.%s = function (ctx, host, port, callback) { return call("%s", "%s", [ctx, host, port]).then(function (value) { value.items.forEach(callback); return value.result; }); };\n' "$library" "$name" "$library" "$name" >> "$NATIVE_FACADE_FILE"
+        else
+            printf '    bridge.%s.%s = function () { return call("%s", "%s", Array.prototype.slice.call(arguments)).then(function (value) { return Object.prototype.hasOwnProperty.call(value, "out") ? value.out : value.result; }); };\n' "$library" "$name" "$library" "$name" >> "$NATIVE_FACADE_FILE"
+        fi
+    done < "$BRIDGE_FUNCTIONS_FILE"
+    cat <<'EOF' >> "$NATIVE_FACADE_FILE"
+    window.NativeBridge = bridge;
+})();
+EOF
 }
 
-# Builds the generated common kclib dispatcher for both supported Android ABIs.
-# @return 0 when both generated dispatcher outputs compile.
+# Injects the generated facade before the selected application document scripts.
+# @return 0 when the application start document references the facade.
+inject_native_facade () {
+    START_DOCUMENT="$ASSETS_DIR/$APP_START"
+    START_DIR=$(dirname "${APP_START#www/}")
+    FACADE_PATH="js/native-bridge.js"
+    while [ "$START_DIR" != "." ] && [ "$START_DIR" != "/" ]; do
+        FACADE_PATH="../$FACADE_PATH"
+        START_DIR=$(dirname "$START_DIR")
+    done
+    [ -f "$START_DOCUMENT" ] || { echo "error: app start document not found: $START_DOCUMENT" >&2; exit 1; }
+    awk -v source="$FACADE_PATH" '
+        { print }
+        !inserted && /<[Hh][Ee][Aa][Dd][^>]*>/ {
+            print "  <script src=\"" source "\"></script>"
+            inserted = 1
+        }
+        END { if (!inserted) exit 1 }
+    ' "$START_DOCUMENT" > "$START_DOCUMENT.generated" \
+        || { echo "error: cannot inject NativeBridge facade into: $START_DOCUMENT" >&2; exit 1; }
+    mv "$START_DOCUMENT.generated" "$START_DOCUMENT"
+}
+
+# Builds the generated common kclib bridge for both supported Android ABIs.
+# @return 0 when both generated bridge outputs compile.
 build_common_native () {
     [ -x "$NDK_TOOLCHAIN/bin/aarch64-linux-android$MIN_SDK-clang" ] || { echo "error: Android NDK compiler not found under: $NDK_TOOLCHAIN" >&2; exit 1; }
-
     for KCLIB_ARCH in aarch64 armv7; do
         case "$KCLIB_ARCH" in
-            aarch64)
-                ANDROID_ABI="arm64-v8a"
-                NDK_CC="$NDK_TOOLCHAIN/bin/aarch64-linux-android$MIN_SDK-clang"
-                ;;
-            armv7)
-                ANDROID_ABI="armeabi-v7a"
-                NDK_CC="$NDK_TOOLCHAIN/bin/armv7a-linux-androideabi$MIN_SDK-clang"
-                ;;
+            aarch64) ANDROID_ABI="arm64-v8a"; NDK_CC="$NDK_TOOLCHAIN/bin/aarch64-linux-android$MIN_SDK-clang" ;;
+            armv7) ANDROID_ABI="armeabi-v7a"; NDK_CC="$NDK_TOOLCHAIN/bin/armv7a-linux-androideabi$MIN_SDK-clang" ;;
         esac
-        "$NDK_CC" -shared -fPIC -I"$KCLIB_WORK_DIR/abi/abi.c/src" \
-            -L"$NATIVE_PACKAGE_DIR/lib/$ANDROID_ABI" "-Wl,-rpath,\$ORIGIN" \
-            -o "$NATIVE_PACKAGE_DIR/lib/$ANDROID_ABI/libkcapkbridge.so" \
-            "$NATIVE_DISPATCHER_FILE" -labi || { echo "error: common bridge compilation failed for $KCLIB_ARCH" >&2; exit 1; }
+        set -- "$NDK_CC" -shared -fPIC -L"$NATIVE_PACKAGE_DIR/lib/$ANDROID_ABI" "-Wl,-rpath,\$ORIGIN" \
+            -o "$NATIVE_PACKAGE_DIR/lib/$ANDROID_ABI/libkcapkbridge.so" "$NATIVE_DISPATCHER_FILE"
+        for DEP in $KCLIB_DEPS; do
+            set -- "$@" -I"$KCLIB_WORK_DIR/$DEP/$DEP.c/src"
+        done
+        for DEP in $KCLIB_DEPS; do
+            set -- "$@" -l"$DEP"
+        done
+        "$@" || { echo "error: common bridge compilation failed for $KCLIB_ARCH" >&2; exit 1; }
     done
 }
 
@@ -1158,7 +1454,9 @@ echo "www build timestamp: $BUILD_TIMESTAMP"
 
 echo "Preparing declared kclib dependencies..."
 prepare_kclib_dependencies
+discover_kclib_functions
 generate_common_bridge
+inject_native_facade
 build_common_native
 build_project_native
 
@@ -2454,7 +2752,7 @@ $FULLSCREEN_SETUP
             }
         });
         webView.addJavascriptInterface(jsBridge, JS_INTERFACE_NAME);
-        webView.addJavascriptInterface(new NativeBridge(this, webView, jsBridge), "NativeBridge");
+        webView.addJavascriptInterface(new NativeBridge(this, webView, jsBridge), "__kcNativeTransport");
 
         webView.loadDataWithBaseURL(splashBaseUrl(), loadSplashPage(), "text/html", "UTF-8", null);
 
