@@ -428,8 +428,7 @@ discover_kclib_functions () {
             | .. | objects | select(.kind? == "FunctionDecl" and .name? and .loc != null)
             | select((.loc.file? == null and (.loc.includedFrom? == null)) or (.loc.file? != null and (.loc.file | startswith($source))))
             | (.type.qualType | capture("^(?<return>.*) \\(").return | type_model($types)) as $return_model
-            | ([.inner[]? | select(.kind == "FullComment") | .. | objects | select(.kind? == "TextComment") | .text] | join(" ") | test("(?i)releases")) as $releases
-            | {library: $library, name: .name, result: $return_model, releases_opaque: $releases, parameters: [.inner[]? | select(.kind == "ParmVarDecl") | (.type.desugaredQualType // .type.qualType | type_model($types))]}
+            | {library: $library, name: .name, result: $return_model, parameters: [.inner[]? | select(.kind == "ParmVarDecl") | (.type.desugaredQualType // .type.qualType | type_model($types))]}
         ' "$DEP_AST" >> "$BRIDGE_FUNCTIONS_FILE" || { echo "error: cannot read public declarations: $DEP_HEADER" >&2; exit 1; }
     done
 }
@@ -454,10 +453,9 @@ emit_bridge_case () {
     name=$(printf '%s' "$declaration" | jq -r '.name')
     result_type=$(printf '%s' "$declaration" | jq -r '.result.qual')
     result_category=$(printf '%s' "$declaration" | jq -r '.result.category')
-    releases_opaque=$(printf '%s' "$declaration" | jq -r '.releases_opaque')
     case "$result_category" in void|bool|signed|unsigned|float|enum|string|opaque|value) ;; *) bridge_unsupported_type "$library" "$name" return "$(printf '%s' "$declaration" | jq -r '.result.canonical')" ;; esac
     count=$(printf '%s' "$declaration" | jq '.parameters | length')
-    declarations='' checks='' assignments='' allocations='' post_call='' call_args='' cleanup='' releases='' js_index=0
+    declarations='' checks='' assignments='' allocations='' post_call='' call_args='' cleanup='' js_index=0
     output_kind='' output_index='' callback_index=''
     index=0
     while [ "$index" -lt "$count" ]; do
@@ -470,7 +468,7 @@ emit_bridge_case () {
             unsigned) declarations="$declarations        uint64_t raw_$index = 0;\n        $type arg_$index;\n"; checks="$checks !bridge_json_u64(args, $js_index, &raw_$index) ||"; assignments="$assignments        arg_$index = ($type)raw_$index;\n"; call_args="$call_args${call_args:+, }arg_$index"; js_index=$((js_index + 1)) ;;
             float) declarations="$declarations        double raw_$index = 0;\n        $type arg_$index;\n"; checks="$checks !bridge_json_double(args, $js_index, &raw_$index) ||"; assignments="$assignments        arg_$index = ($type)raw_$index;\n"; call_args="$call_args${call_args:+, }arg_$index"; js_index=$((js_index + 1)) ;;
             string) declarations="$declarations        char *arg_$index = NULL;\n"; checks="$checks !bridge_json_string(args, $js_index, &arg_$index) ||"; cleanup="$cleanup        free(arg_$index);\n"; call_args="$call_args${call_args:+, }arg_$index"; js_index=$((js_index + 1)) ;;
-            opaque) declarations="$declarations        uint64_t handle_$index = 0;\n        $type arg_$index;\n"; checks="$checks !bridge_json_u64(args, $js_index, &handle_$index) || (arg_$index = ($type)bridge_handle_get(handle_$index)) == NULL ||"; [ "$releases_opaque" = true ] && releases="$releases        bridge_handle_drop(handle_$index);\n"; call_args="$call_args${call_args:+, }arg_$index"; js_index=$((js_index + 1)) ;;
+            opaque) declarations="$declarations        uint64_t handle_$index = 0;\n        $type arg_$index;\n"; checks="$checks !bridge_json_u64(args, $js_index, &handle_$index) || (arg_$index = ($type)bridge_handle_get(handle_$index)) == NULL ||"; call_args="$call_args${call_args:+, }arg_$index"; js_index=$((js_index + 1)) ;;
             opaque_out) [ -z "$output_kind" ] || bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical"; pointee=$(printf '%s' "$type" | sed 's/[[:space:]]*\*\([[:space:]]*\)\?$//'); declarations="$declarations        $pointee arg_$index = NULL;\n        uint64_t out_$index = 0;\n"; post_call="$post_call        out_$index = bridge_handle_put(arg_$index);\n"; call_args="$call_args${call_args:+, }&arg_$index"; output_kind=handle; output_index=$index ;;
             string_out) [ "$index" -lt $((count - 1)) ] || bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical"; [ -z "$output_kind" ] || bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical"; next_category=$(printf '%s' "$declaration" | jq -r ".parameters[$((index + 1))].category"); [ "$next_category" = unsigned ] || bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical"; declarations="$declarations        char *arg_$index = NULL;\n"; allocations="$allocations        if (raw_$((index + 1)) == 0 || raw_$((index + 1)) > 65536) { strcpy(output, \"{\\\"error\\\":\\\"invalid arguments\\\"}\"); return bridge_response(env, output); }\n        arg_$index = calloc((size_t)raw_$((index + 1)), 1);\n        if (arg_$index == NULL) { strcpy(output, \"{\\\"error\\\":\\\"out of memory\\\"}\"); return bridge_response(env, output); }\n"; cleanup="$cleanup        free(arg_$index);\n"; call_args="$call_args${call_args:+, }arg_$index"; output_kind=string; output_index=$index ;;
             callback) callback_return=$(printf '%s' "$parameter" | jq -r '.callback.return.category'); callback_first=$(printf '%s' "$parameter" | jq -r '.callback.parameters[0].category'); callback_second=$(printf '%s' "$parameter" | jq -r '.callback.parameters[1].category'); callback_params=$(printf '%s' "$parameter" | jq -r '.callback.parameters | length'); userdata_category=$(printf '%s' "$declaration" | jq -r ".parameters[$((index + 1))].category"); if [ "$callback_return" != void ] || [ "$callback_params" -ne 2 ] || [ "$callback_first" != string ] || [ "$callback_second" != void_pointer ] || [ "$userdata_category" != void_pointer ]; then bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical"; fi; [ -z "$output_kind" ] || bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical"; declarations="$declarations        bridge_callback_list_t list_$index = {{0}, 0, 0};\n"; call_args="$call_args${call_args:+, }bridge_callback_collect, &list_$index"; output_kind=items; output_index=$index; callback_index=$js_index; index=$((index + 1)) ;;
@@ -507,7 +505,7 @@ EOF
             '') printf '        bridge_result_number(output, sizeof(output), (double)result);\n' >> "$BRIDGE_CASES_FILE" ;;
         esac
     fi
-    printf '%b%b' "$releases" "$cleanup" >> "$BRIDGE_CASES_FILE"
+    printf '%b' "$cleanup" >> "$BRIDGE_CASES_FILE"
     cat >> "$BRIDGE_CASES_FILE" <<'EOF'
         return bridge_response(env, output);
     }
@@ -593,7 +591,7 @@ EOF
     cat <<EOF > "$NATIVE_DISPATCHER_FILE"
 /**
  * native-bridge.c - Generated typed kclib JNI bridge.
- * Summary: Invokes Clang-discovered manifest-selected public functions.
+ * Summary: Invokes Clang-discovered functions without inferring handle lifetime.
  *
  * Author: KaisarCode
  * Website: https://kaisarcode.com
@@ -668,15 +666,6 @@ static void *bridge_handle_get(uint64_t value) {
 }
 
 /**
- * Invalidates one handle consumed by a documented native release.
- * @param value Opaque handle value.
- * @return None.
- */
-static void bridge_handle_drop(uint64_t value) {
-    if (value > 0 && value < sizeof(bridge_handles) / sizeof(bridge_handles[0])) bridge_handles[value] = NULL;
-}
-
-/**
  * Creates a Java string from one JSON response.
  * @param env JNI environment.
  * @param text JSON response text.
@@ -697,6 +686,47 @@ static int bridge_json_empty(const char *text) {
 }
 
 /**
+ * Locates one positional scalar or string token in a JSON array.
+ * @param text JSON array text.
+ * @param index Requested value position.
+ * @param start Receives token start.
+ * @param end Receives token end.
+ * @return Nonzero when the requested token is present and complete.
+ */
+static int bridge_json_value(const char *text, int index, const char **start, const char **end) {
+    const char *p = text;
+    int current = 0;
+    while (*p == ' ' || *p == '\\t' || *p == '\\n' || *p == '\\r') p++;
+    if (*p++ != '[') return 0;
+    for (;;) {
+        const char *token;
+        while (*p == ' ' || *p == '\\t' || *p == '\\n' || *p == '\\r') p++;
+        if (*p == ']') return 0;
+        token = p;
+        if (*p == '\"') {
+            p++;
+            while (*p && *p != '\"') {
+                if (*p++ == '\\\\' && *p) p++;
+            }
+            if (*p++ != '\"') return 0;
+        } else {
+            while (*p && *p != ',' && *p != ']') p++;
+            if (p == token) return 0;
+        }
+        if (current == index) {
+            const char *limit = p;
+            while (limit > token && (limit[-1] == ' ' || limit[-1] == '\\t' || limit[-1] == '\\n' || limit[-1] == '\\r')) limit--;
+            *start = token;
+            *end = limit;
+            return 1;
+        }
+        while (*p == ' ' || *p == '\\t' || *p == '\\n' || *p == '\\r') p++;
+        if (*p++ != ',') return 0;
+        current++;
+    }
+}
+
+/**
  * Reads one string argument from a JSON array.
  * @param text JSON text.
  * @param index Argument position.
@@ -704,36 +734,19 @@ static int bridge_json_empty(const char *text) {
  * @return Nonzero on success.
  */
 static int bridge_json_string(const char *text, int index, char **out) {
-    const char *p = text;
-    int current = 0;
+    const char *start;
+    const char *end;
     size_t size = 0;
     char *value;
-    while (*p && *p != '[') p++;
-    if (*p++ != '[') return 0;
-    while (*p == ' ' || *p == '\\t' || *p == '\\n' || *p == '\\r') p++;
-    while (current < index) {
-        if (*p != '\"') return 0;
-        p++;
-        while (*p && *p != '\"') { if (*p++ == '\\\\' && *p) p++; }
-        if (*p++ != '\"') return 0;
-        while (*p == ' ' || *p == '\\t') p++;
-        if (*p++ != ',') return 0;
-        while (*p == ' ' || *p == '\\t' || *p == '\\n' || *p == '\\r') p++;
-        current++;
+    if (!bridge_json_value(text, index, &start, &end) || end - start < 2 || *start++ != '\"' || end[-1] != '\"') return 0;
+    end--;
+    value = malloc((size_t)(end - start) + 1);
+    if (value == NULL) return 0;
+    while (start < end) {
+        if (*start == '\\\\' && start + 1 < end) start++;
+        value[size++] = *start++;
     }
-    if (*p++ != '\"') return 0;
-    {
-        const char *start = p;
-        while (*p && *p != '\"') { if (*p == '\\\\' && p[1]) p++; p++; }
-        if (*p != '\"') return 0;
-        value = malloc((size_t)(p - start) + 1);
-        if (value == NULL) return 0;
-        while (start < p) {
-            if (*start == '\\\\' && start + 1 < p) start++;
-            value[size++] = *start++;
-        }
-        value[size] = '\\0';
-    }
+    value[size] = '\\0';
     *out = value;
     return 1;
 }
@@ -746,19 +759,12 @@ static int bridge_json_string(const char *text, int index, char **out) {
  * @return Nonzero on success.
  */
 static int bridge_json_u64(const char *text, int index, uint64_t *out) {
-    const char *p = text;
-    int current = 0;
+    const char *start;
+    const char *limit;
     char *end;
-    while (*p && *p != '[') p++;
-    if (*p++ != '[') return 0;
-    while (*p == ' ' || *p == '\\t' || *p == '\\n' || *p == '\\r') p++;
-    while (current < index) {
-        while (*p && *p != ',' && *p != ']') p++;
-        if (*p++ != ',') return 0;
-        current++;
-    }
-    *out = strtoull(p, &end, 10);
-    return end != p;
+    if (!bridge_json_value(text, index, &start, &limit)) return 0;
+    *out = strtoull(start, &end, 10);
+    return end != start && end == limit;
 }
 
 /**
@@ -769,19 +775,12 @@ static int bridge_json_u64(const char *text, int index, uint64_t *out) {
  * @return Nonzero on success.
  */
 static int bridge_json_i64(const char *text, int index, int64_t *out) {
-    const char *p = text;
-    int current = 0;
+    const char *start;
+    const char *limit;
     char *end;
-    while (*p && *p != '[') p++;
-    if (*p++ != '[') return 0;
-    while (*p == ' ' || *p == '\\t' || *p == '\\n' || *p == '\\r') p++;
-    while (current < index) {
-        while (*p && *p != ',' && *p != ']') p++;
-        if (*p++ != ',') return 0;
-        current++;
-    }
-    *out = strtoll(p, &end, 10);
-    return end != p;
+    if (!bridge_json_value(text, index, &start, &limit)) return 0;
+    *out = strtoll(start, &end, 10);
+    return end != start && end == limit;
 }
 
 /**
@@ -792,19 +791,12 @@ static int bridge_json_i64(const char *text, int index, int64_t *out) {
  * @return Nonzero on success.
  */
 static int bridge_json_double(const char *text, int index, double *out) {
-    const char *p = text;
-    int current = 0;
+    const char *start;
+    const char *limit;
     char *end;
-    while (*p && *p != '[') p++;
-    if (*p++ != '[') return 0;
-    while (*p == ' ' || *p == '\\t' || *p == '\\n' || *p == '\\r') p++;
-    while (current < index) {
-        while (*p && *p != ',' && *p != ']') p++;
-        if (*p++ != ',') return 0;
-        current++;
-    }
-    *out = strtod(p, &end);
-    return end != p;
+    if (!bridge_json_value(text, index, &start, &limit)) return 0;
+    *out = strtod(start, &end);
+    return end != start && end == limit;
 }
 
 /**

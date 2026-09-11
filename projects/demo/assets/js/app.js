@@ -22,6 +22,8 @@
             throw new Error('typed opaque output was not returned');
         }
         context = handle;
+        return NativeBridge.redp2p.redp2p_set_vip(context, 'a,b', 64);
+    }).then(function () {
         return NativeBridge.redp2p.redp2p_set_stream_faults(context, 7, 11);
     }).then(function (result) {
         if (result !== 0) {
