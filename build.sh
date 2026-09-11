@@ -404,14 +404,14 @@ discover_kclib_functions () {
         DEP_HEADER="$KCLIB_WORK_DIR/$DEP/$DEP.c/src/lib$DEP.h"
         DEP_AST="$KCLIB_WORK_DIR/$DEP.ast"
         "$NDK_TOOLCHAIN/bin/aarch64-linux-android$MIN_SDK-clang" -fsyntax-only -I"$KCLIB_WORK_DIR/$DEP/$DEP.c/src" -Xclang -ast-dump=json -x c "$DEP_HEADER" > "$DEP_AST" 2>/dev/null || { echo "error: cannot inspect public header: $DEP_HEADER" >&2; exit 1; }
-        jq -c --arg library "$DEP" '
+        jq -c --arg library "$DEP" --arg source "$KCLIB_WORK_DIR/$DEP/$DEP.c/src/" '
             def clean: gsub("\\b(const|volatile|restrict)\\b"; "") | gsub("[[:space:]]+"; " ") | sub("^ "; "") | sub(" $"; "");
             def aliases: reduce (.. | objects | select(.kind? == "TypedefDecl" and .name? and .type? and .type.qualType?)) as $d ({}; .[$d.name] = ($d.type.desugaredQualType // $d.type.qualType));
             def type_model($types):
                 . as $source | ($source | clean) as $q
                 | if ($q | test("\\(\\*\\)")) then
-                    ($q | capture("^(?<return>.*) \\(\\*\\)\\((?<parameters>.*)\\)$")) as $callback
-                    | {qual: $source, canonical: $q, pointer_depth: 1, const: false, category: "callback", callback: {return: $callback.return, parameters: ($callback.parameters | if . == "void" or . == "" then [] else split(", ") end)}}
+                    ($source | capture("^(?<return>.*) \\(\\*\\)\\((?<parameters>.*)\\)$")) as $callback
+                    | {qual: $source, canonical: $q, pointer_depth: 1, const: false, category: "callback", callback: {return: ($callback.return | type_model($types)), parameters: ($callback.parameters | if . == "void" or . == "" then [] else split(", ") | map(type_model($types)) end)}}
                 else
                     ([$q | scan("\\*")] | length) as $depth
                     | ($q | sub("\\*.*$"; "") | clean) as $base
@@ -425,9 +425,11 @@ discover_kclib_functions () {
                     else .category = "unsupported" end
                 end;
             aliases as $types
-            | .. | objects | select(.kind? == "FunctionDecl" and .name? and .loc != null and (.loc.includedFrom? == null))
+            | .. | objects | select(.kind? == "FunctionDecl" and .name? and .loc != null)
+            | select((.loc.file? == null and (.loc.includedFrom? == null)) or (.loc.file? != null and (.loc.file | startswith($source))))
             | (.type.qualType | capture("^(?<return>.*) \\(").return | type_model($types)) as $return_model
-            | {library: $library, name: .name, result: $return_model, parameters: [.inner[]? | select(.kind == "ParmVarDecl") | (.type.desugaredQualType // .type.qualType | type_model($types))]}
+            | ([.inner[]? | select(.kind == "FullComment") | .. | objects | select(.kind? == "TextComment") | .text] | join(" ") | test("(?i)releases")) as $releases
+            | {library: $library, name: .name, result: $return_model, releases_opaque: $releases, parameters: [.inner[]? | select(.kind == "ParmVarDecl") | (.type.desugaredQualType // .type.qualType | type_model($types))]}
         ' "$DEP_AST" >> "$BRIDGE_FUNCTIONS_FILE" || { echo "error: cannot read public declarations: $DEP_HEADER" >&2; exit 1; }
     done
 }
@@ -452,9 +454,11 @@ emit_bridge_case () {
     name=$(printf '%s' "$declaration" | jq -r '.name')
     result_type=$(printf '%s' "$declaration" | jq -r '.result.qual')
     result_category=$(printf '%s' "$declaration" | jq -r '.result.category')
-    case "$result_category" in void|bool|signed|unsigned|float|string|opaque|value) ;; *) bridge_unsupported_type "$library" "$name" return "$(printf '%s' "$declaration" | jq -r '.result.canonical')" ;; esac
+    releases_opaque=$(printf '%s' "$declaration" | jq -r '.releases_opaque')
+    case "$result_category" in void|bool|signed|unsigned|float|enum|string|opaque|value) ;; *) bridge_unsupported_type "$library" "$name" return "$(printf '%s' "$declaration" | jq -r '.result.canonical')" ;; esac
     count=$(printf '%s' "$declaration" | jq '.parameters | length')
-    declarations='' checks='' call_args='' cleanup='' js_index=0
+    declarations='' checks='' assignments='' allocations='' post_call='' call_args='' cleanup='' releases='' js_index=0
+    output_kind='' output_index='' callback_index=''
     index=0
     while [ "$index" -lt "$count" ]; do
         parameter=$(printf '%s' "$declaration" | jq -c ".parameters[$index]")
@@ -462,24 +466,28 @@ emit_bridge_case () {
         canonical=$(printf '%s' "$parameter" | jq -r '.canonical')
         category=$(printf '%s' "$parameter" | jq -r '.category')
         case "$category" in
-            signed|enum|bool) declarations="$declarations        int64_t raw_$index = 0;\n        $type arg_$index;\n"; checks="$checks !bridge_json_i64(args, $js_index, &raw_$index) ||"; declarations="$declarations        arg_$index = ($type)raw_$index;\n"; call_args="$call_args${call_args:+, }arg_$index"; js_index=$((js_index + 1)) ;;
-            unsigned) declarations="$declarations        uint64_t raw_$index = 0;\n        $type arg_$index;\n        arg_$index = ($type)raw_$index;\n"; checks="$checks !bridge_json_u64(args, $js_index, &raw_$index) ||"; call_args="$call_args${call_args:+, }arg_$index"; js_index=$((js_index + 1)) ;;
-            float) declarations="$declarations        double raw_$index = 0;\n        $type arg_$index;\n        arg_$index = ($type)raw_$index;\n"; checks="$checks !bridge_json_double(args, $js_index, &raw_$index) ||"; call_args="$call_args${call_args:+, }arg_$index"; js_index=$((js_index + 1)) ;;
+            signed|enum|bool) declarations="$declarations        int64_t raw_$index = 0;\n        $type arg_$index;\n"; checks="$checks !bridge_json_i64(args, $js_index, &raw_$index) ||"; assignments="$assignments        arg_$index = ($type)raw_$index;\n"; call_args="$call_args${call_args:+, }arg_$index"; js_index=$((js_index + 1)) ;;
+            unsigned) declarations="$declarations        uint64_t raw_$index = 0;\n        $type arg_$index;\n"; checks="$checks !bridge_json_u64(args, $js_index, &raw_$index) ||"; assignments="$assignments        arg_$index = ($type)raw_$index;\n"; call_args="$call_args${call_args:+, }arg_$index"; js_index=$((js_index + 1)) ;;
+            float) declarations="$declarations        double raw_$index = 0;\n        $type arg_$index;\n"; checks="$checks !bridge_json_double(args, $js_index, &raw_$index) ||"; assignments="$assignments        arg_$index = ($type)raw_$index;\n"; call_args="$call_args${call_args:+, }arg_$index"; js_index=$((js_index + 1)) ;;
             string) declarations="$declarations        char *arg_$index = NULL;\n"; checks="$checks !bridge_json_string(args, $js_index, &arg_$index) ||"; cleanup="$cleanup        free(arg_$index);\n"; call_args="$call_args${call_args:+, }arg_$index"; js_index=$((js_index + 1)) ;;
-            opaque) declarations="$declarations        uint64_t handle_$index = 0;\n        $type arg_$index;\n"; checks="$checks !bridge_json_u64(args, $js_index, &handle_$index) || (arg_$index = ($type)bridge_handle_get(handle_$index)) == NULL ||"; call_args="$call_args${call_args:+, }arg_$index"; js_index=$((js_index + 1)) ;;
-            opaque_out) pointee=$(printf '%s' "$type" | sed 's/[[:space:]]*\*\([[:space:]]*\)\?$//'); declarations="$declarations        $pointee arg_$index = NULL;\n        uint64_t out_$index;\n"; call_args="$call_args${call_args:+, }&arg_$index" ;;
-            string_out) [ "$index" -lt $((count - 1)) ] || bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical"; next_category=$(printf '%s' "$declaration" | jq -r ".parameters[$((index + 1))].category"); [ "$next_category" = unsigned ] || bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical"; declarations="$declarations        char *arg_$index = NULL;\n"; call_args="$call_args${call_args:+, }arg_$index" ;;
-            callback) callback_return=$(printf '%s' "$parameter" | jq -r '.callback.return'); callback_params=$(printf '%s' "$parameter" | jq -r '.callback.parameters | length'); if [ "$callback_return" != void ] || [ "$callback_params" -ne 2 ]; then bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical"; fi; declarations="$declarations        bridge_callback_list_t list_$index = {{0}, 0, 0};\n"; call_args="$call_args${call_args:+, }bridge_callback_collect, &list_$index"; index=$((index + 1)) ;;
+            opaque) declarations="$declarations        uint64_t handle_$index = 0;\n        $type arg_$index;\n"; checks="$checks !bridge_json_u64(args, $js_index, &handle_$index) || (arg_$index = ($type)bridge_handle_get(handle_$index)) == NULL ||"; [ "$releases_opaque" = true ] && releases="$releases        bridge_handle_drop(handle_$index);\n"; call_args="$call_args${call_args:+, }arg_$index"; js_index=$((js_index + 1)) ;;
+            opaque_out) [ -z "$output_kind" ] || bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical"; pointee=$(printf '%s' "$type" | sed 's/[[:space:]]*\*\([[:space:]]*\)\?$//'); declarations="$declarations        $pointee arg_$index = NULL;\n        uint64_t out_$index = 0;\n"; post_call="$post_call        out_$index = bridge_handle_put(arg_$index);\n"; call_args="$call_args${call_args:+, }&arg_$index"; output_kind=handle; output_index=$index ;;
+            string_out) [ "$index" -lt $((count - 1)) ] || bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical"; [ -z "$output_kind" ] || bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical"; next_category=$(printf '%s' "$declaration" | jq -r ".parameters[$((index + 1))].category"); [ "$next_category" = unsigned ] || bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical"; declarations="$declarations        char *arg_$index = NULL;\n"; allocations="$allocations        if (raw_$((index + 1)) == 0 || raw_$((index + 1)) > 65536) { strcpy(output, \"{\\\"error\\\":\\\"invalid arguments\\\"}\"); return bridge_response(env, output); }\n        arg_$index = calloc((size_t)raw_$((index + 1)), 1);\n        if (arg_$index == NULL) { strcpy(output, \"{\\\"error\\\":\\\"out of memory\\\"}\"); return bridge_response(env, output); }\n"; cleanup="$cleanup        free(arg_$index);\n"; call_args="$call_args${call_args:+, }arg_$index"; output_kind=string; output_index=$index ;;
+            callback) callback_return=$(printf '%s' "$parameter" | jq -r '.callback.return.category'); callback_first=$(printf '%s' "$parameter" | jq -r '.callback.parameters[0].category'); callback_second=$(printf '%s' "$parameter" | jq -r '.callback.parameters[1].category'); callback_params=$(printf '%s' "$parameter" | jq -r '.callback.parameters | length'); userdata_category=$(printf '%s' "$declaration" | jq -r ".parameters[$((index + 1))].category"); if [ "$callback_return" != void ] || [ "$callback_params" -ne 2 ] || [ "$callback_first" != string ] || [ "$callback_second" != void_pointer ] || [ "$userdata_category" != void_pointer ]; then bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical"; fi; [ -z "$output_kind" ] || bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical"; declarations="$declarations        bridge_callback_list_t list_$index = {{0}, 0, 0};\n"; call_args="$call_args${call_args:+, }bridge_callback_collect, &list_$index"; output_kind=items; output_index=$index; callback_index=$js_index; index=$((index + 1)) ;;
             void_pointer) bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical" ;;
             *) bridge_unsupported_type "$library" "$name" "parameter $index" "$canonical" ;;
         esac
         index=$((index + 1))
     done
+    if [ -n "$output_kind" ] && [ "$result_category" != bool ] && [ "$result_category" != signed ] && [ "$result_category" != unsigned ] && [ "$result_category" != float ] && [ "$result_category" != enum ]; then
+        bridge_unsupported_type "$library" "$name" return "$result_type with output parameter"
+    fi
     cat >> "$BRIDGE_CASES_FILE" <<EOF
     if (strcmp(library, "$library") == 0 && strcmp(name, "$name") == 0) {
 $(printf '%b' "$declarations")        if (${checks:-0 || } !bridge_json_done(args, $js_index)) { strcpy(output, "{\\"error\\":\\"invalid arguments\\"}");
 $(printf '%b' "$cleanup")            return bridge_response(env, output); }
 EOF
+    printf '%b' "$assignments$allocations" >> "$BRIDGE_CASES_FILE"
     if [ "$result_category" = void ]; then
         printf '        %s(%s);\n' "$name" "$call_args" >> "$BRIDGE_CASES_FILE"
         printf '        bridge_result_null(output, sizeof(output));\n' >> "$BRIDGE_CASES_FILE"
@@ -490,18 +498,31 @@ EOF
     elif [ "$result_category" = value ]; then
         printf '        %s *result = malloc(sizeof(*result));\n        if (result == NULL) { strcpy(output, "{\\"error\\":\\"out of memory\\"}"); return bridge_response(env, output); }\n        *result = %s(%s);\n        bridge_result_handle(output, sizeof(output), bridge_handle_put(result));\n' "$result_type" "$name" "$call_args" >> "$BRIDGE_CASES_FILE"
     else
-        printf '        %s result = %s(%s);\n        bridge_result_number(output, sizeof(output), (double)result);\n' "$result_type" "$name" "$call_args" >> "$BRIDGE_CASES_FILE"
+        printf '        %s result = %s(%s);\n' "$result_type" "$name" "$call_args" >> "$BRIDGE_CASES_FILE"
+        printf '%b' "$post_call" >> "$BRIDGE_CASES_FILE"
+        case "$output_kind" in
+            handle) printf '        bridge_result_number_handle(output, sizeof(output), (double)result, out_%s);\n' "$output_index" >> "$BRIDGE_CASES_FILE" ;;
+            string) printf '        bridge_result_number_string(output, sizeof(output), (double)result, arg_%s);\n' "$output_index" >> "$BRIDGE_CASES_FILE" ;;
+            items) printf '        bridge_result_number_items(output, sizeof(output), (double)result, list_%s.text);\n' "$output_index" >> "$BRIDGE_CASES_FILE" ;;
+            '') printf '        bridge_result_number(output, sizeof(output), (double)result);\n' >> "$BRIDGE_CASES_FILE" ;;
+        esac
     fi
-    printf '%b' "$cleanup" >> "$BRIDGE_CASES_FILE"
+    printf '%b%b' "$releases" "$cleanup" >> "$BRIDGE_CASES_FILE"
     cat >> "$BRIDGE_CASES_FILE" <<'EOF'
         return bridge_response(env, output);
     }
 EOF
     BRIDGE_FUNCTION_ROWS="$BRIDGE_FUNCTION_ROWS
     {\"$library\", \"$name\"},"
-    BRIDGE_FACADE_ROWS="$BRIDGE_FACADE_ROWS
+    if [ -n "$callback_index" ]; then
+        BRIDGE_FACADE_ROWS="$BRIDGE_FACADE_ROWS
+    bridge.$library = bridge.$library || {};
+    bridge.$library.$name = function () { var values = Array.prototype.slice.call(arguments); var callback = values.splice($callback_index, 1)[0]; if (typeof callback !== \"function\") return Promise.reject(new Error(\"invalid callback\")); return call(\"$library\", \"$name\", values).then(function (value) { value.items.forEach(callback); return Object.prototype.hasOwnProperty.call(value, \"out\") ? value.out : value.result; }); };"
+    else
+        BRIDGE_FACADE_ROWS="$BRIDGE_FACADE_ROWS
     bridge.$library = bridge.$library || {};
     bridge.$library.$name = function () { var values = Array.prototype.slice.call(arguments); return call(\"$library\", \"$name\", values).then(function (value) { return Object.prototype.hasOwnProperty.call(value, \"out\") ? value.out : value.result; }); };"
+    fi
 }
 
 # Generates JavaScript, JNI, and typed C calls from the discovered declarations.
@@ -647,7 +668,7 @@ static void *bridge_handle_get(uint64_t value) {
 }
 
 /**
- * Forgets one generated opaque handle.
+ * Invalidates one handle consumed by a documented native release.
  * @param value Opaque handle value.
  * @return None.
  */
@@ -764,6 +785,29 @@ static int bridge_json_i64(const char *text, int index, int64_t *out) {
 }
 
 /**
+ * Reads one floating-point value from a JSON array.
+ * @param text JSON text.
+ * @param index Argument position.
+ * @param out Receives the value.
+ * @return Nonzero on success.
+ */
+static int bridge_json_double(const char *text, int index, double *out) {
+    const char *p = text;
+    int current = 0;
+    char *end;
+    while (*p && *p != '[') p++;
+    if (*p++ != '[') return 0;
+    while (*p == ' ' || *p == '\\t' || *p == '\\n' || *p == '\\r') p++;
+    while (current < index) {
+        while (*p && *p != ',' && *p != ']') p++;
+        if (*p++ != ',') return 0;
+        current++;
+    }
+    *out = strtod(p, &end);
+    return end != p;
+}
+
+/**
  * Verifies the number of JSON array values.
  * @param text JSON text.
  * @param count Expected value count.
@@ -791,6 +835,18 @@ static int bridge_json_done(const char *text, int count) {
  */
 static void bridge_result_number(char *output, size_t cap, double value) {
     snprintf(output, cap, "{\"result\":%.17g}", value);
+}
+
+/**
+ * Writes a numeric result and an opaque output handle.
+ * @param output Response buffer.
+ * @param cap Response buffer capacity.
+ * @param value Numeric result.
+ * @param handle Opaque output handle.
+ * @return None.
+ */
+static void bridge_result_number_handle(char *output, size_t cap, double value, uint64_t handle) {
+    snprintf(output, cap, "{\"result\":%.17g,\"out\":%llu}", value, (unsigned long long)handle);
 }
 
 /**
@@ -833,28 +889,33 @@ static void bridge_result_string(char *output, size_t cap, const char *value) {
 }
 
 /**
- * Writes one base64 JSON response for binary data.
+ * Writes a numeric result and an escaped output string.
  * @param output Response buffer.
  * @param cap Response buffer capacity.
- * @param data Binary result.
- * @param size Binary result size.
+ * @param value Numeric result.
+ * @param text Output string.
  * @return None.
  */
-static void bridge_result_binary(char *output, size_t cap, const void *data, size_t size) {
-    static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    const unsigned char *p = data;
-    size_t index = 0;
-    size_t written = (size_t)snprintf(output, cap, "{\"result\":\"");
-    while (index < size && written + 6 < cap) {
-        unsigned int a = p[index++];
-        unsigned int b = index < size ? p[index++] : 0;
-        unsigned int c = index < size ? p[index++] : 0;
-        output[written++] = alphabet[a >> 2];
-        output[written++] = alphabet[((a & 3) << 4) | (b >> 4)];
-        output[written++] = index - 1 < size ? alphabet[((b & 15) << 2) | (c >> 6)] : '=';
-        output[written++] = index < size ? alphabet[c & 63] : '=';
+static void bridge_result_number_string(char *output, size_t cap, double value, const char *text) {
+    size_t written = (size_t)snprintf(output, cap, "{\"result\":%.17g,\"out\":\"", value);
+    const unsigned char *p = (const unsigned char *)(text == NULL ? "" : text);
+    while (*p && written + 8 < cap) {
+        if (*p == '\\"' || *p == '\\\\') output[written++] = '\\\\';
+        output[written++] = (char)*p++;
     }
     snprintf(output + written, cap - written, "\"}");
+}
+
+/**
+ * Writes a numeric result and collected callback items.
+ * @param output Response buffer.
+ * @param cap Response buffer capacity.
+ * @param value Numeric result.
+ * @param items JSON item values.
+ * @return None.
+ */
+static void bridge_result_number_items(char *output, size_t cap, double value, const char *items) {
+    snprintf(output, cap, "{\"result\":%.17g,\"items\":[%s]}", value, items == NULL ? "" : items);
 }
 
 /**

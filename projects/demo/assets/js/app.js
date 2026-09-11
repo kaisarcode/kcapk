@@ -10,12 +10,31 @@
     'use strict';
 
     var output = document.getElementById('output');
+    var context;
 
     NativeBridge.redp2p.redp2p_is_valid_id('demo').then(function (valid) {
         if (valid !== 1) {
             throw new Error('typed string parameter was rejected');
         }
+        return NativeBridge.redp2p.redp2p_open();
+    }).then(function (handle) {
+        if (!handle) {
+            throw new Error('typed opaque output was not returned');
+        }
+        context = handle;
+        return NativeBridge.redp2p.redp2p_set_stream_faults(context, 7, 11);
+    }).then(function (result) {
+        if (result !== 0) {
+            throw new Error('typed scalar arguments were rejected');
+        }
         return NativeBridge.redp2p.redp2p_version();
+    }).then(function (version) {
+        return NativeBridge.redp2p.redp2p_close(context).then(function (result) {
+            if (result !== 0) {
+                throw new Error('typed handle release was rejected');
+            }
+            return version;
+        });
     }).then(function (version) {
         output.textContent = version > 0
             ? 'redp2p version: ' + version + '\nNativeBridge loaded successfully.'
