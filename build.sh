@@ -1000,8 +1000,7 @@ EOF
     cat <<'EOF' > "$NATIVE_FACADE_FILE"
 /**
  * native-bridge.js - Generated NativeBridge facade.
- * Summary: Exposes Android host methods and typed kclib functions
- *          discovered from manifest-selected public headers.
+ * Summary: Exposes Android host methods and generated typed kclib functions.
  * Author: KaisarCode
  * Website: https://kaisarcode.com
  * License: https://www.gnu.org/licenses/gpl-3.0.html
@@ -1052,19 +1051,49 @@ EOF
             dispatch();
         });
     }
+
+    /**
+     * Sends one host method call through the internal host transport.
+     * @param method Internal host transport method name.
+     * @param args JavaScript arguments.
+     * @return Promise resolving to the internal host result.
+     */
+    function callHost(method, args) {
+        return new Promise(function (resolve, reject) {
+
+            /**
+             * Delays dispatch until the trusted page token is available.
+             * @return None.
+             */
+            function dispatch() {
+                var host = window.__kcHostTransport;
+                var token = window.__kcBridgeToken;
+                if (!token) {
+                    window.setTimeout(dispatch, 0);
+                    return;
+                }
+                try {
+                    resolve(host[method].apply(host, [token].concat(args)));
+                } catch (error) {
+                    reject(error);
+                }
+            }
+            dispatch();
+        });
+    }
 EOF
     printf '%b\n' "$BRIDGE_FACADE_ROWS" >> "$NATIVE_FACADE_FILE"
     cat <<'EOF' >> "$NATIVE_FACADE_FILE"
 
     if (window.__kcHostTransport) {
         window.NativeBridge.showToast = function (message) {
-            return window.__kcHostTransport.showToast(window.__kcBridgeToken, message);
+            return callHost("showToast", [message]);
         };
         window.NativeBridge.isOnline = function () {
-            return window.__kcHostTransport.isOnline(window.__kcBridgeToken);
+            return callHost("isOnline", []);
         };
         window.NativeBridge.getFilesDir = function () {
-            return window.__kcHostTransport.getFilesDir(window.__kcBridgeToken);
+            return callHost("getFilesDir", []);
         };
     }
 })();
