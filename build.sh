@@ -999,8 +999,9 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
 EOF
     cat <<'EOF' > "$NATIVE_FACADE_FILE"
 /**
- * native-bridge.js - Generated kclib facade.
- * Summary: Exposes only typed functions discovered from manifest-selected public headers.
+ * native-bridge.js - Generated NativeBridge facade.
+ * Summary: Exposes Android host methods and typed kclib functions
+ *          discovered from manifest-selected public headers.
  * Author: KaisarCode
  * Website: https://kaisarcode.com
  * License: https://www.gnu.org/licenses/gpl-3.0.html
@@ -1054,6 +1055,18 @@ EOF
 EOF
     printf '%b\n' "$BRIDGE_FACADE_ROWS" >> "$NATIVE_FACADE_FILE"
     cat <<'EOF' >> "$NATIVE_FACADE_FILE"
+
+    if (window.__kcHostTransport) {
+        window.NativeBridge.showToast = function (message) {
+            return window.__kcHostTransport.showToast(window.__kcBridgeToken, message);
+        };
+        window.NativeBridge.isOnline = function () {
+            return window.__kcHostTransport.isOnline(window.__kcBridgeToken);
+        };
+        window.NativeBridge.getFilesDir = function () {
+            return window.__kcHostTransport.getFilesDir(window.__kcBridgeToken);
+        };
+    }
 })();
 EOF
 }
@@ -1476,7 +1489,7 @@ cat << EOF > "$VALUES_DIR/strings.xml"
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">$DISPLAY_NAME</string>
-    <string name="js_interface_name">NativeBridge</string>
+    <string name="js_interface_name">__kcHostTransport</string>
 </resources>
 EOF
 
@@ -2664,7 +2677,7 @@ $FULLSCREEN_IMPORTS
 
 public class MainActivity extends Activity {
     private static final String TAG = "MainActivity";
-    private static final String JS_INTERFACE_NAME = "NativeBridge";
+    private static final String JS_INTERFACE_NAME = "__kcHostTransport";
     private static final String[] TRUSTED_ORIGINS = { $JAVA_TRUSTED_ORIGINS };
 
     private WebView webView;

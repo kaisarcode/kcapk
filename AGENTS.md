@@ -9,7 +9,9 @@ an explicit project boundary for application semantics.
 ## Architecture
 
 `window.NativeBridge` is the single public root native bridge object.
-Android host capabilities are exposed directly as `window.NativeBridge.<method>`.
+Android host capabilities are exposed as `window.NativeBridge.<method>` through
+the generated facade; the internal host transport and capability token stay
+hidden from application code.
 
 Generated common kcapk infrastructure builds the `window.NativeBridge.KcLib`
 namespace. It exposes only optional kclibs declared by `manifest.json:kclib`,

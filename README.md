@@ -128,8 +128,8 @@ with matching headers and `.so` files.
 
 `window.NativeBridge` is the single public root native bridge object.
 
-Android host capabilities are native services provided directly by the Android
-host and are exposed under:
+Android host capabilities are native services provided by the Android host and
+are exposed under:
 
 ```js
 window.NativeBridge.<method>()
@@ -142,9 +142,11 @@ namespace as:
 window.NativeBridge.KcLib.<kclib>.<exact_C_function_name>()
 ```
 
-The generated kclib facade extends the existing `window.NativeBridge` object
-rather than replacing it, so host methods and kclib namespaces coexist on the
-same root.
+The generated facade builds a single `window.NativeBridge` object that carries
+both the Android host methods and the `KcLib` kclib namespaces. Host methods
+forward to an internal, hidden host transport that supplies the capability
+token itself, so application code never supplies or sees it. Neither path
+replaces the other.
 
 The generated bridge is produced by `build.sh`. It maintains the existing
 trusted WebView capability gate and exposes only manifest-selected functions
