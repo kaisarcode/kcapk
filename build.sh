@@ -1009,7 +1009,9 @@ EOF
 (function () {
     'use strict';
     var transport = window.__kcNativeTransport;
-    var bridge = {};
+    window.NativeBridge = window.NativeBridge || {};
+    window.NativeBridge.KcLib = window.NativeBridge.KcLib || {};
+    var bridge = window.NativeBridge.KcLib;
 
     /**
      * Sends one facade call through the trusted internal transport.
@@ -1052,7 +1054,6 @@ EOF
 EOF
     printf '%b\n' "$BRIDGE_FACADE_ROWS" >> "$NATIVE_FACADE_FILE"
     cat <<'EOF' >> "$NATIVE_FACADE_FILE"
-    window.NativeBridge = bridge;
 })();
 EOF
 }
@@ -1475,7 +1476,7 @@ cat << EOF > "$VALUES_DIR/strings.xml"
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">$DISPLAY_NAME</string>
-    <string name="js_interface_name">AndroidBridge</string>
+    <string name="js_interface_name">NativeBridge</string>
 </resources>
 EOF
 
@@ -2663,7 +2664,7 @@ $FULLSCREEN_IMPORTS
 
 public class MainActivity extends Activity {
     private static final String TAG = "MainActivity";
-    private static final String JS_INTERFACE_NAME = "AndroidBridge";
+    private static final String JS_INTERFACE_NAME = "NativeBridge";
     private static final String[] TRUSTED_ORIGINS = { $JAVA_TRUSTED_ORIGINS };
 
     private WebView webView;
