@@ -251,7 +251,7 @@ JS_INTERFACE_FILE="$SRC_DIR/JSBridge.java"
 WEBVIEW_CLIENT_FILE="$SRC_DIR/TrustedWebViewClient.java"
 PROVISIONER_FILE="$SRC_DIR/Provisioner.java"
 NATIVE_BRIDGE_FILE="$SRC_DIR/NativeBridge.java"
-NATIVE_DISPATCHER_FILE="$BASE_DIR/native-bridge.c"
+NATIVE_DISPATCHER_FILE="$BASE_DIR/bridge.c"
 NATIVE_FACADE_FILE="$ASSETS_DIR/www/js/native-bridge.js"
 BRIDGE_FUNCTIONS_FILE="$KCLIB_WORK_DIR/functions.tsv"
 BRIDGE_CASES_FILE="$KCLIB_WORK_DIR/cases.c"
@@ -590,7 +590,7 @@ $PROJECT_NATIVE_LIBRARY_LOAD
 EOF
     cat <<EOF > "$NATIVE_DISPATCHER_FILE"
 /**
- * native-bridge.c - Generated typed kclib JNI bridge.
+ * bridge.c - Generated typed kclib JNI bridge.
  * Summary: Invokes Clang-discovered functions without inferring handle lifetime.
  *
  * Author: KaisarCode
