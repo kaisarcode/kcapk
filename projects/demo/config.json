@@ -7,5 +7,7 @@
   "fullscreen": true,
   "version_code": 1,
   "version_name": "0.1.0",
-  "app_manifest_url": "https://kaisarcode.com/kcapk/dist/demo/manifest.json"
+  "app_manifest_url": "https://kaisarcode.com/kcapk/dist/demo/manifest.json",
+  "kclib": ["redp2p"],
+  "start": "www/index.html"
 }

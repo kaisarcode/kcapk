@@ -12,7 +12,7 @@ is required for the normal build flow.
 
 - `window.NativeBridge` is the single public bridge root.
 - Android host capabilities are available under `window.NativeBridge.<method>`.
-- manifest-selected kclibs are optional build-time dependencies exposed under `window.NativeBridge.KcLib.<kclib>`.
+- config-selected kclibs are optional build-time dependencies exposed under `window.NativeBridge.KcLib.<kclib>`.
 - Native `.so` files ship with the APK/AAB and are not runtime-updated.
 - Web assets may continue to update independently.
 - Project JNI/native integration belongs in `projects/NAME/native/`.
@@ -30,7 +30,6 @@ kcapk/
 |   |-- assets/
 |   `-- projects/NAME/
 |       |-- config.json
-|       |-- manifest.json
 |       |-- assets/
 |       |-- native/          # project-specific native integration when present
 |       `-- app/             # generated build tree; do not edit
@@ -66,12 +65,24 @@ The general builder remains responsible for Android mechanics such as:
 
 ## Project contract
 
-A project has a small declarative contract.
+A project has a small declarative contract in `projects/NAME/config.json`.
+It is developer-authored source configuration. By contrast,
+`dist/NAME/manifest.json` is generated release metadata and must not be edited
+as source configuration.
 
-Example `manifest.json`:
+Example `config.json`:
 
 ```json
 {
+  "display_name": "Demo",
+  "package_name": "com.kaisarcode.demo",
+  "icon": "icon.png",
+  "icon_background": "#222222",
+  "trusted_origins": ["file:///"],
+  "fullscreen": true,
+  "version_code": 1,
+  "version_name": "0.1.0",
+  "app_manifest_url": "https://kaisarcode.com/kcapk/dist/demo/manifest.json",
   "kclib": ["redp2p"],
   "start": "www/index.html"
 }
@@ -85,7 +96,7 @@ available through the generated `window.NativeBridge.KcLib.<kclib>` namespace.
 ## Kclib dependency model
 
 The native dependency set is exactly the `NAME` entries in
-`manifest.json:kclib`. The builder resolves each canonical distribution package under:
+`config.json:kclib`. The builder resolves each canonical distribution package under:
 
 ```text
 KCLIB_DIST_DIR/NAME.c/
@@ -105,7 +116,7 @@ header. The builder discovers public declarations with the NDK Clang AST,
 generates typed C calls against the distributed header, links the common bridge
 against the selected precompiled libraries, and packages the native libraries.
 Kclib implementation C sources are not required or rebuilt. Every APK/AAB
-contains only the manifest-selected `libNAME.so` files in addition to the
+contains only the config-selected `libNAME.so` files in addition to the
 common bridge.
 
 Projects should not manually copy kclib headers or `.so` files when the builder
@@ -131,7 +142,7 @@ are exposed under:
 window.NativeBridge.<method>()
 ```
 
-Generated kclib APIs for manifest-selected kclibs are exposed under the `KcLib`
+Generated kclib APIs for config-selected kclibs are exposed under the `KcLib`
 namespace as:
 
 ```js
@@ -145,7 +156,7 @@ token itself, so application code never supplies or sees it. Neither path
 replaces the other.
 
 The generated bridge is produced by `build.sh`. It maintains the existing
-trusted WebView capability gate and exposes only manifest-selected functions
+trusted WebView capability gate and exposes only config-selected functions
 discovered from their real public header trees. Generated native code invokes
 those typed C declarations and links directly to the selected packaged
 libraries. It never accepts paths or arbitrary process symbols from application
@@ -210,7 +221,7 @@ or other generated behavior belong in `repo/build.sh`.
 
 Automate deterministic build mechanics.
 
-If behavior can be derived reliably from `manifest.json` and the canonical
+If behavior can be derived reliably from `config.json` and the canonical
 kclib dist layout, it belongs in the builder.
 
 `projects/NAME/native/bridge.c` remains available for project-specific native

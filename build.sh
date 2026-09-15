@@ -167,10 +167,8 @@ TRUSTED_ORIGINS="${TRUSTED_ORIGINS:-}"
 WEBVIEW_DEBUG="$(cfg webview_debug)"
 WEBVIEW_DEBUG="${WEBVIEW_DEBUG:-false}"
 
-APP_SOURCE_MANIFEST="$APP_DIR/manifest.json"
-[ -f "$APP_SOURCE_MANIFEST" ] || { echo "error: app manifest not found: $APP_SOURCE_MANIFEST" >&2; exit 1; }
-KCLIB_DEPS="$(json_get "$APP_SOURCE_MANIFEST" kclib)"
-APP_START="$(json_get "$APP_SOURCE_MANIFEST" start)"
+KCLIB_DEPS="$(cfg kclib)"
+APP_START="$(cfg start)"
 APP_START="${APP_START:-www/index.html}"
 
 PLATFORM_VERSION="android-$TARGET_SDK"
@@ -909,7 +907,7 @@ static void bridge_result_number_items(char *output, size_t cap, double value, c
 }
 
 /**
- * Lists manifest-selected libraries for the internal transport.
+ * Lists config-selected libraries for the internal transport.
  * @param env JNI environment.
  * @param type Native class.
  * @return JSON library array.
