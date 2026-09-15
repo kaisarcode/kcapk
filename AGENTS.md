@@ -33,13 +33,15 @@ For every declared dependency, `build.sh` resolves these canonical
 distribution inputs:
 
 ```text
-KCLIB_DIST_DIR/NAME.c/source.zip
 KCLIB_DIST_DIR/NAME.c/aarch64/android/libNAME.so
+KCLIB_DIST_DIR/NAME.c/aarch64/android/libNAME.h
 KCLIB_DIST_DIR/NAME.c/armv7/android/libNAME.so
+KCLIB_DIST_DIR/NAME.c/armv7/android/libNAME.h
 ```
 
-`source.zip` is extracted only into build staging to provide headers. Each
-kclib uses `src/libNAME.h`; implementation C sources are never rebuilt.
+Each target directory provides the public `libNAME.h` beside its precompiled
+library. Kcapk consumes those distributed headers directly; kclib implementation
+sources are not required or rebuilt.
 
 ## Native packaging
 

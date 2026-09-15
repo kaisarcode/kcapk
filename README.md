@@ -94,23 +94,19 @@ KCLIB_DIST_DIR/NAME.c/
 The canonical Android inputs are:
 
 ```text
-KCLIB_DIST_DIR/NAME.c/source.zip
 KCLIB_DIST_DIR/NAME.c/aarch64/android/libNAME.so
+KCLIB_DIST_DIR/NAME.c/aarch64/android/libNAME.h
 KCLIB_DIST_DIR/NAME.c/armv7/android/libNAME.so
+KCLIB_DIST_DIR/NAME.c/armv7/android/libNAME.h
 ```
 
-`source.zip` supplies bridge and project-native headers rooted at:
-
-```text
-src/libNAME.h
-```
-
-The builder extracts the complete source tree into build staging, discovers
-public declarations with the NDK Clang AST, generates typed C calls against
-those real headers, links the common bridge against the selected precompiled
-libraries, and packages the native libraries. Kclib implementation C sources
-are not rebuilt. Every APK/AAB contains only the manifest-selected
-`libNAME.so` files in addition to the common bridge.
+Each target directory supplies the precompiled library together with its public
+header. The builder discovers public declarations with the NDK Clang AST,
+generates typed C calls against the distributed header, links the common bridge
+against the selected precompiled libraries, and packages the native libraries.
+Kclib implementation C sources are not required or rebuilt. Every APK/AAB
+contains only the manifest-selected `libNAME.so` files in addition to the
+common bridge.
 
 Projects should not manually copy kclib headers or `.so` files when the builder
 can derive them from the canonical distribution.

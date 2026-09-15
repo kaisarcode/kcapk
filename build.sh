@@ -361,7 +361,7 @@ valid_kclib_name () {
     esac
 }
 
-# Prepares declared kclib headers and Android shared libraries.
+# Prepares declared kclib Android shared libraries.
 # @return 0 when every declared dependency is ready.
 prepare_kclib_dependencies () {
     [ -d "$KCLIB_DIST_DIR" ] || { echo "error: kclib dist directory not found: $KCLIB_DIST_DIR" >&2; exit 1; }
@@ -372,26 +372,23 @@ prepare_kclib_dependencies () {
 
     for DEP in $KCLIB_DEPS; do
         DEP_DIST_DIR="$KCLIB_DIST_DIR/$DEP.c"
-        DEP_ZIP="$DEP_DIST_DIR/source.zip"
-        DEP_WORK_DIR="$KCLIB_WORK_DIR/$DEP"
-        DEP_HEADER_DIR="$DEP_WORK_DIR/$DEP.c/src"
-
-        [ -f "$DEP_ZIP" ] || { echo "error: kclib source package not found: $DEP_ZIP" >&2; exit 1; }
-        unzip -q "$DEP_ZIP" -d "$DEP_WORK_DIR" || { echo "error: failed to extract: $DEP_ZIP" >&2; exit 1; }
-        DEP_HEADER="$DEP_HEADER_DIR/lib$DEP.h"
-        [ -f "$DEP_HEADER" ] || { echo "error: kclib public header not found: $DEP_HEADER" >&2; exit 1; }
 
         for KCLIB_ARCH in aarch64 armv7; do
             case "$KCLIB_ARCH" in
                 aarch64) ANDROID_ABI="arm64-v8a" ;;
                 armv7) ANDROID_ABI="armeabi-v7a" ;;
             esac
-            DEP_SO="$DEP_DIST_DIR/$KCLIB_ARCH/android/lib$DEP.so"
+
+            DEP_TARGET_DIR="$DEP_DIST_DIR/$KCLIB_ARCH/android"
+            DEP_SO="$DEP_TARGET_DIR/lib$DEP.so"
+            DEP_HEADER="$DEP_TARGET_DIR/lib$DEP.h"
+
             [ -f "$DEP_SO" ] || { echo "error: kclib Android library not found: $DEP_SO" >&2; exit 1; }
+            [ -f "$DEP_HEADER" ] || { echo "error: kclib public header not found: $DEP_HEADER" >&2; exit 1; }
+
             mkdir -p "$NATIVE_PACKAGE_DIR/lib/$ANDROID_ABI"
             cp "$DEP_SO" "$NATIVE_PACKAGE_DIR/lib/$ANDROID_ABI/lib$DEP.so"
         done
-
     done
 }
 
@@ -401,10 +398,11 @@ discover_kclib_functions () {
     : > "$BRIDGE_FUNCTIONS_FILE"
     [ -x "$NDK_TOOLCHAIN/bin/aarch64-linux-android$MIN_SDK-clang" ] || { echo "error: Android NDK compiler not found under: $NDK_TOOLCHAIN" >&2; exit 1; }
     for DEP in $KCLIB_DEPS; do
-        DEP_HEADER="$KCLIB_WORK_DIR/$DEP/$DEP.c/src/lib$DEP.h"
+        DEP_HEADER_DIR="$KCLIB_DIST_DIR/$DEP.c/aarch64/android"
+        DEP_HEADER="$DEP_HEADER_DIR/lib$DEP.h"
         DEP_AST="$KCLIB_WORK_DIR/$DEP.ast"
-        "$NDK_TOOLCHAIN/bin/aarch64-linux-android$MIN_SDK-clang" -fsyntax-only -I"$KCLIB_WORK_DIR/$DEP/$DEP.c/src" -Xclang -ast-dump=json -x c "$DEP_HEADER" > "$DEP_AST" 2>/dev/null || { echo "error: cannot inspect public header: $DEP_HEADER" >&2; exit 1; }
-        jq -c --arg library "$DEP" --arg source "$KCLIB_WORK_DIR/$DEP/$DEP.c/src/" '
+        "$NDK_TOOLCHAIN/bin/aarch64-linux-android$MIN_SDK-clang" -fsyntax-only -I"$DEP_HEADER_DIR" -Xclang -ast-dump=json -x c "$DEP_HEADER" > "$DEP_AST" 2>/dev/null || { echo "error: cannot inspect public header: $DEP_HEADER" >&2; exit 1; }
+        jq -c --arg library "$DEP" --arg source "$DEP_HEADER_DIR/" '
             def clean: gsub("\\b(const|volatile|restrict)\\b"; "") | gsub("[[:space:]]+"; " ") | sub("^ "; "") | sub(" $"; "");
             def aliases: reduce (.. | objects | select(.kind? == "TypedefDecl" and .name? and .type? and .type.qualType?)) as $d ({}; .[$d.name] = ($d.type.desugaredQualType // $d.type.qualType));
             def type_model($types):
@@ -1135,7 +1133,7 @@ build_common_native () {
         set -- "$NDK_CC" -shared -fPIC -L"$NATIVE_PACKAGE_DIR/lib/$ANDROID_ABI" "-Wl,-rpath,\$ORIGIN" \
             -o "$NATIVE_PACKAGE_DIR/lib/$ANDROID_ABI/libkcapkbridge.so" "$NATIVE_DISPATCHER_FILE"
         for DEP in $KCLIB_DEPS; do
-            set -- "$@" -I"$KCLIB_WORK_DIR/$DEP/$DEP.c/src"
+            set -- "$@" -I"$KCLIB_DIST_DIR/$DEP.c/$KCLIB_ARCH/android"
         done
         for DEP in $KCLIB_DEPS; do
             set -- "$@" -l"$DEP"
@@ -1165,7 +1163,7 @@ build_project_native () {
             "-Wl,-rpath,\$ORIGIN" -o "$NATIVE_PACKAGE_DIR/lib/$ANDROID_ABI/libprojectbridge.so" "$NATIVE_C_SOURCE"
         for DEP in $KCLIB_DEPS; do
             [ -n "$DEP" ] || continue
-            set -- "$@" -I"$KCLIB_WORK_DIR/$DEP/$DEP.c/src"
+            set -- "$@" -I"$KCLIB_DIST_DIR/$DEP.c/$KCLIB_ARCH/android"
         done
         for DEP in $KCLIB_DEPS; do
             [ -n "$DEP" ] || continue
