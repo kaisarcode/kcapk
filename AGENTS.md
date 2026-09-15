@@ -15,7 +15,7 @@ hidden from application code.
 
 Generated common kcapk infrastructure builds the `window.NativeBridge.KcLib`
 namespace. It exposes only optional kclibs declared by `config.json:kclib`,
-discovers their public functions from the extracted `libNAME.h` headers at
+discovers their public functions from the distributed `libNAME.h` headers at
 build time, and retains the WebView trusted-origin capability gate before every
 native operation.
 

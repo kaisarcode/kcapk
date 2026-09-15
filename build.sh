@@ -1,6 +1,6 @@
 #!/bin/sh
 # build.sh
-# Summary: Manifest-driven Android thin-client APK/AAB builder.
+# Summary: Android thin-client APK/AAB builder.
 #          Generates the common kclib bridge, packages native dependencies,
 #          and publishes the app manifest, assets, and APK to ../dist/<project>/.
 # Author:  KaisarCode
@@ -349,7 +349,7 @@ setup_release_signing () {
     fi
 }
 
-# Rejects a manifest dependency name that cannot safely name a kclib package.
+# Rejects a configured dependency name that cannot safely name a kclib package.
 # @param name Candidate kclib name.
 # @return 0 when the name is lowercase alphanumeric with optional underscores.
 valid_kclib_name () {
@@ -430,7 +430,7 @@ discover_kclib_functions () {
 }
 
 # Stops generation for an unsupported typed declaration.
-# @param library Manifest-selected library name.
+# @param library Config-selected library name.
 # @param name Public function name.
 # @param position Parameter or return position.
 # @param type Unsupported canonical type.

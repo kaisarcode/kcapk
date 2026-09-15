@@ -1,6 +1,6 @@
 # kcapk
 
-`kcapk` is a small manifest-driven Android application builder.
+`kcapk` is a small Android application builder.
 
 It keeps one general Android build path while allowing each project to define
 its own frontend and, when needed, its own native integration.
