@@ -12,7 +12,7 @@ is required for the normal build flow.
 
 - `window.NativeBridge` is the single public bridge root.
 - Android host capabilities are available under `window.NativeBridge.<method>`.
-- config-selected kclibs are optional build-time dependencies exposed under `window.NativeBridge.KcLib.<kclib>`.
+- config-selected kclibs are optional build-time dependencies exposed under `window.NativeBridge.<kclib>`.
 - Native `.so` files ship with the APK/AAB and are not runtime-updated.
 - Web assets may continue to update independently.
 - Project JNI/native integration belongs in `projects/NAME/native/`.
@@ -91,7 +91,7 @@ Example `config.json`:
 `start` selects the application start document.
 
 `kclib` selects the application kclibs. Selected kclibs are automatically
-available through the generated `window.NativeBridge.KcLib.<kclib>` namespace.
+available through the generated `window.NativeBridge.<kclib>` namespace.
 
 ## Kclib dependency model
 
@@ -142,15 +142,15 @@ are exposed under:
 window.NativeBridge.<method>()
 ```
 
-Generated kclib APIs for config-selected kclibs are exposed under the `KcLib`
-namespace as:
+Generated kclib APIs for config-selected kclibs are exposed directly under the
+`window.NativeBridge` root as:
 
 ```js
-window.NativeBridge.KcLib.<kclib>.<exact_C_function_name>()
+window.NativeBridge.<kclib>.<exact_C_function_name>()
 ```
 
 The generated facade builds a single `window.NativeBridge` object that carries
-both the Android host methods and the `KcLib` kclib namespaces. Host methods
+both the Android host methods and the kclib namespaces. Host methods
 forward to an internal, hidden host transport that supplies the capability
 token itself, so application code never supplies or sees it. Neither path
 replaces the other.
@@ -171,7 +171,7 @@ WebView / JavaScript
           |
           +-- <host method>            direct Android host capabilities
           |
-          +-- KcLib.<kclib>.<function> generated kclib APIs
+          +-- <kclib>.<function> generated kclib APIs
                   |
                   +-- generated Java facade
                           |
@@ -185,8 +185,8 @@ Application code calls the bridge directly, for example:
 
 ```js
 window.NativeBridge.showToast(...)
-window.NativeBridge.KcLib.redp2p.redp2p_version()
-window.NativeBridge.KcLib.redp2p.redp2p_is_valid_id("demo")
+window.NativeBridge.redp2p.redp2p_version()
+window.NativeBridge.redp2p.redp2p_is_valid_id("demo")
 ```
 
 The facade owns tokens, JSON transport, JNI dispatch, and library lookup.

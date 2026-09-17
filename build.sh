@@ -1006,8 +1006,7 @@ EOF
     'use strict';
     var transport = window.__kcNativeTransport;
     window.NativeBridge = window.NativeBridge || {};
-    window.NativeBridge.KcLib = window.NativeBridge.KcLib || {};
-    var bridge = window.NativeBridge.KcLib;
+    var bridge = window.NativeBridge;
 
     /**
      * Sends one facade call through the trusted internal transport.

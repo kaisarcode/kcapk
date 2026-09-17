@@ -12,26 +12,26 @@
     var output = document.getElementById('output');
     var context;
 
-    window.NativeBridge.KcLib.redp2p.redp2p_is_valid_id('demo').then(function (valid) {
+    window.NativeBridge.redp2p.redp2p_is_valid_id('demo').then(function (valid) {
         if (valid !== 1) {
             throw new Error('typed string parameter was rejected');
         }
-        return window.NativeBridge.KcLib.redp2p.redp2p_open();
+        return window.NativeBridge.redp2p.redp2p_open();
     }).then(function (handle) {
         if (!handle) {
             throw new Error('typed opaque output was not returned');
         }
         context = handle;
-        return window.NativeBridge.KcLib.redp2p.redp2p_set_vip(context, 'a,b', 64);
+        return window.NativeBridge.redp2p.redp2p_set_vip(context, 'a,b', 64);
     }).then(function () {
-        return window.NativeBridge.KcLib.redp2p.redp2p_set_stream_faults(context, 7, 11);
+        return window.NativeBridge.redp2p.redp2p_set_stream_faults(context, 7, 11);
     }).then(function (result) {
         if (result !== 0) {
             throw new Error('typed scalar arguments were rejected');
         }
-        return window.NativeBridge.KcLib.redp2p.redp2p_version();
+        return window.NativeBridge.redp2p.redp2p_version();
     }).then(function (version) {
-        return window.NativeBridge.KcLib.redp2p.redp2p_close(context).then(function (result) {
+        return window.NativeBridge.redp2p.redp2p_close(context).then(function (result) {
             if (result !== 0) {
                 throw new Error('typed handle release was rejected');
             }
