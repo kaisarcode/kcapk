@@ -1,3 +1,4 @@
 # Generated build trees (never edit by hand)
-projects/*/app/
+proj/*/app/
+dist/
 PLAN.md

@@ -7,6 +7,9 @@
 # Website: https://kaisarcode.com
 # License: https://www.gnu.org/licenses/gpl-3.0.html
 
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+ROOT_DIR=$(dirname "$SCRIPT_DIR")
+
 # Prints the usage message to stdout.
 # @return 0 on success.
 usage () {
@@ -19,7 +22,7 @@ Options:
   -c, --clean     Clean temp files and debug keystore first
 
 Output:
-  projects/PROJECT_NAME/app/bin/PROJECT_NAME.{apk,aab}
+  proj/PROJECT_NAME/app/bin/PROJECT_NAME.{apk,aab}
   ../dist/PROJECT_NAME/manifest.json + www/ + .apk
 EOF
 }
@@ -122,7 +125,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$PROJECT_NAME" ] || { usage >&2; exit 1; }
-APP_DIR="./projects/$PROJECT_NAME"
+APP_DIR="$ROOT_DIR/proj/$PROJECT_NAME"
 CONFIG_FILE="$APP_DIR/config.json"
 
 [ -f "$CONFIG_FILE" ] || { echo "error: config not found: $CONFIG_FILE" >&2; exit 1; }
@@ -195,7 +198,7 @@ ASSETS_DIR="$BASE_DIR/assets"
 ASSETS_SOURCE="$APP_DIR/assets"
 NATIVE_SOURCE_DIR="$APP_DIR/native"
 NATIVE_C_SOURCE="$NATIVE_SOURCE_DIR/bridge.c"
-COMMON_ASSETS_DIR="assets"
+COMMON_ASSETS_DIR="share"
 PUBLISH_DIR="../dist/$PROJECT_NAME"
 
 MIPMAP_MDPI_DIR="$RES_DIR/mipmap-mdpi"
@@ -255,7 +258,7 @@ BRIDGE_FUNCTIONS_FILE="$KCLIB_WORK_DIR/functions.tsv"
 BRIDGE_CASES_FILE="$KCLIB_WORK_DIR/cases.c"
 
 KCLIB_DIST_DIR="$(cfg kclib_dist_dir)"
-KCLIB_DIST_DIR="${KCLIB_DIST_DIR:-../../kclib/dist}"
+KCLIB_DIST_DIR="${KCLIB_DIST_DIR:-$ROOT_DIR/../kclib/dist}"
 ANDROID_NDK_ROOT_CFG="$(cfg android_ndk_root)"
 if [ -n "$ANDROID_NDK_ROOT_CFG" ]; then
     ANDROID_NDK_ROOT="$ANDROID_NDK_ROOT_CFG"
