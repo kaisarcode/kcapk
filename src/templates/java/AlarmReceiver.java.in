@@ -30,5 +30,15 @@ public class AlarmReceiver extends BroadcastReceiver {
             NotificationBridge.post(context, action);
         } catch (Exception ignored) {
         }
+        long next = AlarmBridge.nextOccurrence(alarm, System.currentTimeMillis(), true);
+        if (next > 0) {
+            try {
+                alarm.put("at", next);
+                alarm.put("exact", AlarmBridge.canScheduleExact(context));
+                alarm.put("allowWhileIdle", true);
+                AlarmBridge.schedule(context, alarm, true);
+            } catch (Exception ignored) {
+            }
+        }
     }
 }
