@@ -124,6 +124,10 @@ prepare_web_assets () {
         fi
     fi
 
+    if [ "$LOCAL_HTTPS_ASSETS" = true ]; then
+        RESOLVED_TRUSTED_ORIGINS="$RESOLVED_TRUSTED_ORIGINS https://appassets.androidplatform.net"
+    fi
+
     JAVA_TRUSTED_ORIGINS=""
     for ORIGIN in $RESOLVED_TRUSTED_ORIGINS; do
         if [ -n "$JAVA_TRUSTED_ORIGINS" ]; then

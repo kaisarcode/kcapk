@@ -14,6 +14,7 @@ configure_build () {
     BACKGROUND="${BACKGROUND:-#101010}"
     TRUSTED_ORIGINS="${TRUSTED_ORIGINS:-}"
     IS_FULLSCREEN="${IS_FULLSCREEN:-false}"
+    LOCAL_HTTPS_ASSETS="${LOCAL_HTTPS_ASSETS:-false}"
     VERSION_CODE="${VERSION_CODE:-1}"
     VERSION_NAME="${VERSION_NAME:-1.0}"
     TARGET_SDK="36"
@@ -141,6 +142,10 @@ $1"
                 else
                     SHARE_TARGETS="$1"
                 fi
+                shift
+                ;;
+            --local-https-assets)
+                LOCAL_HTTPS_ASSETS=true
                 shift
                 ;;
             --fullscreen)
