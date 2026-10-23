@@ -6,6 +6,10 @@ import android.net.Uri;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.WebResourceResponse;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.util.Collections;
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -15,13 +19,53 @@ public class TrustedWebViewClient extends WebViewClient {
     private final Context context;
     private final String[] trustedOrigins;
     private final JSBridge bridge;
+    private final boolean localHttpsAssets;
     private final String nativeBridgeScript;
 
-    public TrustedWebViewClient(Context context, String[] trustedOrigins, JSBridge bridge) {
+    public TrustedWebViewClient(Context context, String[] trustedOrigins, JSBridge bridge, boolean localHttpsAssets) {
         this.context = context;
+        this.localHttpsAssets = localHttpsAssets;
         this.trustedOrigins = trustedOrigins;
         this.bridge = bridge;
         this.nativeBridgeScript = loadBridgeScript(context);
+    }
+
+    // Opt-in local HTTPS origin. Assets are served from the APK, never a server.
+    @Override
+    public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+        if (!localHttpsAssets) return super.shouldInterceptRequest(view, request);
+        Uri uri = request.getUrl();
+        if (!"https".equals(uri.getScheme())
+                || !"appassets.androidplatform.net".equals(uri.getHost())
+                || uri.getPort() != -1) {
+            return super.shouldInterceptRequest(view, request);
+        }
+        String path = uri.getPath();
+        if (path == null || !path.matches("/[a-zA-Z0-9_./-]+") || path.contains("..")) {
+            return missingAsset();
+        }
+        String name = path.substring(1);
+        String mime = "application/octet-stream";
+        if (name.endsWith(".html")) mime = "text/html";
+        else if (name.endsWith(".css")) mime = "text/css";
+        else if (name.endsWith(".js")) mime = "text/javascript";
+        else if (name.endsWith(".svg")) mime = "image/svg+xml";
+        else if (name.endsWith(".mp3")) mime = "audio/mpeg";
+        else if (name.endsWith(".png")) mime = "image/png";
+        else if (name.endsWith(".jpg") || name.endsWith(".jpeg")) mime = "image/jpeg";
+        else if (name.endsWith(".json")) mime = "application/json";
+        try {
+            return new WebResourceResponse(mime, mime.startsWith("text/") ? "UTF-8" : null,
+                200, "OK", Collections.singletonMap("Cache-Control", "no-store, no-cache, must-revalidate"),
+                context.getAssets().open(name));
+        } catch (IOException ignored) {
+            return missingAsset();
+        }
+    }
+
+    private static WebResourceResponse missingAsset() {
+        return new WebResourceResponse("text/plain", "UTF-8", 404, "Not Found",
+            Collections.emptyMap(), new ByteArrayInputStream(new byte[0]));
     }
 
     private boolean openExternally(String url) {

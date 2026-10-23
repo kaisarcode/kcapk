@@ -1,0 +1,99 @@
+package @PACKAGE_NAME@;
+
+import android.Manifest;
+import android.app.Activity;
+import android.content.ActivityNotFoundException;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.net.Uri;
+import android.webkit.PermissionRequest;
+import android.webkit.ValueCallback;
+import android.webkit.WebChromeClient;
+import android.webkit.WebView;
+import java.util.Locale;
+
+/** Browser capture permissions and system file picker for trusted pages. */
+public final class KcapkWebChromeClient extends WebChromeClient {
+    private static final int FILE_CHOOSER_REQUEST = 7814;
+    private final Activity activity;
+    private final WebView webView;
+    private final String[] trustedOrigins;
+    private ValueCallback<Uri[]> pendingFiles;
+
+    public KcapkWebChromeClient(Activity activity, WebView webView, String[] trustedOrigins) {
+        this.activity = activity;
+        this.webView = webView;
+        this.trustedOrigins = trustedOrigins;
+    }
+
+    private boolean trustedPage() {
+        return JSBridge.isTrustedUrl(webView.getUrl(), trustedOrigins);
+    }
+
+    @Override
+    public void onPermissionRequest(PermissionRequest request) {
+        activity.runOnUiThread(() -> {
+            Uri origin = request.getOrigin();
+            Uri page = Uri.parse(webView.getUrl() == null ? "" : webView.getUrl());
+            boolean sameOrigin = origin != null && origin.getScheme() != null
+                && origin.getScheme().equals(page.getScheme())
+                && origin.getHost() != null && origin.getHost().equals(page.getHost())
+                && origin.getPort() == page.getPort();
+            boolean audioOnly = request.getResources().length == 1
+                && PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(request.getResources()[0]);
+            boolean granted = activity.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED;
+            if (trustedPage() && sameOrigin && audioOnly && granted) {
+                request.grant(new String[] {PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+            } else {
+                request.deny();
+            }
+        });
+    }
+
+    @Override
+    public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> callback,
+                                     FileChooserParams params) {
+        if (!trustedPage()) return false;
+        cancelFileChooser();
+        pendingFiles = callback;
+        String mime = "*/*";
+        String[] accepted = params == null ? null : params.getAcceptTypes();
+        if (accepted != null && accepted.length == 1 && accepted[0] != null) {
+            String type = accepted[0].trim().toLowerCase(Locale.ROOT);
+            if (type.startsWith("image/")) mime = "image/*";
+            else if ("application/zip".equals(type) || ".zip".equals(type)
+                || "application/x-zip-compressed".equals(type)) mime = "application/zip";
+            else if (type.matches("[a-z0-9.+-]+/[a-z0-9.+*-]+")) mime = type;
+        }
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType(mime);
+        if (params != null && params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE) {
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        }
+        try {
+            activity.startActivityForResult(intent, FILE_CHOOSER_REQUEST);
+            return true;
+        } catch (ActivityNotFoundException ignored) {
+            cancelFileChooser();
+            return false;
+        }
+    }
+
+    public boolean onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode != FILE_CHOOSER_REQUEST) return false;
+        if (pendingFiles != null) {
+            pendingFiles.onReceiveValue(FileChooserParams.parseResult(resultCode, data));
+            pendingFiles = null;
+        }
+        return true;
+    }
+
+    public void cancelFileChooser() {
+        if (pendingFiles != null) {
+            pendingFiles.onReceiveValue(null);
+            pendingFiles = null;
+        }
+    }
+}

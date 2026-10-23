@@ -11,10 +11,13 @@ import android.webkit.WebView;
 public class MainActivity extends Activity {
     private WebView webView;
     private JSBridge bridge;
+    private KcapkAppExtension extension;
+    private KcapkWebChromeClient chromeClient;
     private static final String WEBVIEW_URL = "@WEBVIEW_URL@";
     private static final String JS_INTERFACE_NAME = "AndroidBridge";
     private static final String[] TRUSTED_ORIGINS = { @TRUSTED_ORIGINS@ };
     private static final boolean IS_FULLSCREEN = @IS_FULLSCREEN@;
+    private static final boolean LOCAL_HTTPS_ASSETS = @LOCAL_HTTPS_ASSETS@;
     private static final String APP_BACKGROUND = "@BACKGROUND@";
 
     @Override
@@ -45,6 +48,7 @@ public class MainActivity extends Activity {
 
         webView.getSettings().setJavaScriptEnabled(true);
         webView.getSettings().setDomStorageEnabled(true);
+        webView.getSettings().setCacheMode(android.webkit.WebSettings.LOAD_NO_CACHE);
         webView.getSettings().setUseWideViewPort(true);
         webView.getSettings().setLoadWithOverviewMode(true);
         webView.setVerticalScrollBarEnabled(false);
@@ -53,8 +57,12 @@ public class MainActivity extends Activity {
         // @KCAPK_API:intents@
         bridge.onNewIntent(getIntent());
         // @KCAPK_END_API@
-        webView.setWebViewClient(new TrustedWebViewClient(this, TRUSTED_ORIGINS, bridge));
+        webView.setWebViewClient(new TrustedWebViewClient(this, TRUSTED_ORIGINS, bridge, LOCAL_HTTPS_ASSETS));
+        chromeClient = new KcapkWebChromeClient(this, webView, TRUSTED_ORIGINS);
+        webView.setWebChromeClient(chromeClient);
         webView.addJavascriptInterface(bridge, JS_INTERFACE_NAME);
+        extension = new KcapkAppExtension(this, webView);
+        extension.attach();
         webView.loadUrl(WEBVIEW_URL);
     }
 
@@ -79,15 +87,17 @@ public class MainActivity extends Activity {
     }
     // @KCAPK_END_API@
 
-    // @KCAPK_API:async@
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (extension != null && extension.onActivityResult(requestCode, resultCode, data)) return;
+        if (chromeClient != null && chromeClient.onActivityResult(requestCode, resultCode, data)) return;
+        // @KCAPK_API:async@
         if (bridge != null) {
             bridge.onActivityResult(requestCode, resultCode, data);
         }
+        // @KCAPK_END_API@
     }
-    // @KCAPK_END_API@
 
     // @KCAPK_API:permissions@
     @Override
@@ -101,6 +111,8 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (extension != null) extension.destroy();
+        if (chromeClient != null) chromeClient.cancelFileChooser();
         if (bridge != null) {
             bridge.destroy();
         }
@@ -113,6 +125,7 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (webView.canGoBack()) { webView.goBack(); } else { super.onBackPressed(); }
+        if (extension != null && extension.onBackPressed()) return;
+        if (webView != null && webView.canGoBack()) { webView.goBack(); } else { super.onBackPressed(); }
     }
 }
