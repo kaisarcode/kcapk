@@ -14,6 +14,7 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- @KCAPK_END_API@ -->
     @PERMISSIONS@
+    @EXTENSION_PERMISSIONS@
     <application
         android:allowBackup="true"
         android:extractNativeLibs="true"
@@ -35,6 +36,7 @@
             </intent-filter>
             @SHARE_TARGETS@
         </activity>
+        @EXTENSION_COMPONENTS@
         <!-- @KCAPK_API:apps@ -->
         <activity-alias
             android:name="@PACKAGE_NAME@.HomeActivity"

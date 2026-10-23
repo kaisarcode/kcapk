@@ -137,6 +137,7 @@ prepare_api_build () {
     REQUEST_NETWORK_PERMISSION=false
     REQUEST_BOOT_PERMISSION=false
     REQUEST_VIBRATE_PERMISSION=false
+    EXTENSION_DIRS=""
 
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -144,6 +145,15 @@ prepare_api_build () {
                 shift
                 [ "$#" -gt 0 ] || { echo "Error: --api requires a value." >&2; exit 1; }
                 enable_api "$1"
+                shift
+                ;;
+            --extension)
+                shift
+                [ "$#" -gt 0 ] || { echo "Error: --extension requires a directory." >&2; exit 1; }
+                [ -d "$1" ] || { echo "Error: Extension directory not found: $1" >&2; exit 1; }
+                EXTENSION_DIRECTORY=$(CDPATH= cd -- "$1" && pwd) || exit 1
+                EXTENSION_DIRS="$EXTENSION_DIRS
+$EXTENSION_DIRECTORY"
                 shift
                 ;;
             --exec)
@@ -225,6 +235,38 @@ prepare_api_build () {
             ScreenBridge.java.in) api_enabled screen || rm -f "$TEMPLATE_FILE" ;;
         esac
     done
+
+    # Compose application Java classes, Android resources, and declarations
+    # without modifying KCAPK templates. Only the hook is overridable.
+    EXTENSION_PERMISSIONS="$WORK_DIR/extension-permissions.xml"
+    EXTENSION_COMPONENTS="$WORK_DIR/extension-components.xml"
+    : > "$EXTENSION_PERMISSIONS"
+    : > "$EXTENSION_COMPONENTS"
+    while IFS= read -r EXTENSION_DIRECTORY; do
+        [ -n "$EXTENSION_DIRECTORY" ] || continue
+        if [ -d "$EXTENSION_DIRECTORY/java" ]; then
+            for EXTENSION_FILE in "$EXTENSION_DIRECTORY"/java/*.java.in; do
+                [ -f "$EXTENSION_FILE" ] || continue
+                TARGET="$WORK_DIR/templates/java/$(basename "$EXTENSION_FILE")"
+                if [ -e "$TARGET" ] && [ "$(basename "$TARGET")" != "KcapkAppExtension.java.in" ]; then
+                    echo "Error: Extension cannot override KCAPK source: $TARGET" >&2
+                    exit 1
+                fi
+                cp "$EXTENSION_FILE" "$TARGET" || exit 1
+            done
+        fi
+        if [ -d "$EXTENSION_DIRECTORY/res" ]; then
+            cp -R "$EXTENSION_DIRECTORY/res/." "$WORK_DIR/templates/res/" || exit 1
+        fi
+        if [ -f "$EXTENSION_DIRECTORY/manifest/permissions.xml" ]; then
+            cat "$EXTENSION_DIRECTORY/manifest/permissions.xml" >> "$EXTENSION_PERMISSIONS" || exit 1
+        fi
+        if [ -f "$EXTENSION_DIRECTORY/manifest/components.xml" ]; then
+            cat "$EXTENSION_DIRECTORY/manifest/components.xml" >> "$EXTENSION_COMPONENTS" || exit 1
+        fi
+    done <<EOF
+$EXTENSION_DIRS
+EOF
 
     printf 'NativeBridge APIs: core'
     for API_NAME in $ENABLED_APIS; do

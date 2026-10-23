@@ -51,6 +51,7 @@ render_template () {
     TRUSTED_ORIGINS_VALUE=$(escape_template_value "$JAVA_TRUSTED_ORIGINS")
     EXECUTABLE_NAMES_VALUE=$(escape_template_value "$JAVA_EXECUTABLE_NAMES")
     FULLSCREEN_VALUE=$(escape_template_value "$IS_FULLSCREEN")
+    LOCAL_HTTPS_ASSETS_VALUE=$(escape_template_value "$LOCAL_HTTPS_ASSETS")
     MIN_SDK_VALUE=$(escape_template_value "$MIN_SDK")
     TARGET_SDK_VALUE=$(escape_template_value "$TARGET_SDK")
 
@@ -66,6 +67,7 @@ render_template () {
         -e "s#@TRUSTED_ORIGINS@#$TRUSTED_ORIGINS_VALUE#g" \
         -e "s#@EXECUTABLE_NAMES@#$EXECUTABLE_NAMES_VALUE#g" \
         -e "s#@IS_FULLSCREEN@#$FULLSCREEN_VALUE#g" \
+        -e "s#@LOCAL_HTTPS_ASSETS@#$LOCAL_HTTPS_ASSETS_VALUE#g" \
         -e "s#@MIN_SDK@#$MIN_SDK_VALUE#g" \
         -e "s#@TARGET_SDK@#$TARGET_SDK_VALUE#g" \
         "$TEMPLATE_FILE" > "$DESTINATION_FILE" || { echo "Error: Failed to render template: $TEMPLATE_FILE" >&2; exit 1; }
@@ -89,6 +91,8 @@ prepare_source_templates () {
     while IFS= read -r LINE || [ -n "$LINE" ]; do
         case "$LINE" in
             *'@PERMISSIONS@'*) cat "$PERMISSION_DECLARATIONS_FILE" ;;
+            *'@EXTENSION_PERMISSIONS@'*) cat "$EXTENSION_PERMISSIONS" ;;
+            *'@EXTENSION_COMPONENTS@'*) cat "$EXTENSION_COMPONENTS" ;;
             *'@SHARE_TARGETS@'*) cat "$SHARE_TARGET_DECLARATIONS_FILE" ;;
             *) printf '%s\n' "$LINE" ;;
         esac
