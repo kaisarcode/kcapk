@@ -57,6 +57,9 @@ public class JSBridge {
     // @KCAPK_API:screen@
     private final ScreenBridge screenBridge;
     // @KCAPK_END_API@
+    // @KCAPK_API:voice@
+    private final VoiceBridge voiceBridge;
+    // @KCAPK_END_API@
     private final AtomicLong pageGeneration = new AtomicLong(0L);
     private volatile boolean bridgeAllowed;
 
@@ -101,6 +104,9 @@ public class JSBridge {
         // @KCAPK_END_API@
         // @KCAPK_API:screen@
         this.screenBridge = new ScreenBridge(context);
+        // @KCAPK_END_API@
+        // @KCAPK_API:voice@
+        this.voiceBridge = new VoiceBridge((Activity) context, asyncBridge);
         // @KCAPK_END_API@
     }
 
@@ -423,6 +429,13 @@ public class JSBridge {
     @JavascriptInterface
     public boolean screenKeepOn(boolean enabled) {
         return canUseBridge() && screenBridge.keepOn(enabled);
+    }
+    // @KCAPK_END_API@
+
+    // @KCAPK_API:voice@
+    @JavascriptInterface
+    public boolean voiceRecognize(long requestId, long generation, String json) {
+        return canUseBridge() && voiceBridge.recognize(requestId, generation, json);
     }
     // @KCAPK_END_API@
 

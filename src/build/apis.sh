@@ -33,6 +33,7 @@ normalize_api_name () {
         system-ui|systemUI) printf '%s\n' systemUI ;;
         clipboard) printf '%s\n' clipboard ;;
         screen) printf '%s\n' screen ;;
+        voice) printf '%s\n' voice ;;
         *) return 1 ;;
     esac
 }
@@ -64,7 +65,7 @@ api_enabled () {
         async)
             $HAS_EXEC && return 0
             case " $ENABLED_APIS " in
-                *" permissions "*|*" files "*|*" apps "*|*" resources "*) return 0 ;;
+                *" permissions "*|*" files "*|*" apps "*|*" resources "*|*" voice "*) return 0 ;;
             esac
             return 1
             ;;
@@ -233,6 +234,7 @@ $EXTENSION_DIRECTORY"
             SystemUIBridge.java.in) api_enabled systemUI || rm -f "$TEMPLATE_FILE" ;;
             ClipboardBridge.java.in) api_enabled clipboard || rm -f "$TEMPLATE_FILE" ;;
             ScreenBridge.java.in) api_enabled screen || rm -f "$TEMPLATE_FILE" ;;
+            VoiceBridge.java.in) api_enabled voice || rm -f "$TEMPLATE_FILE" ;;
         esac
     done
 

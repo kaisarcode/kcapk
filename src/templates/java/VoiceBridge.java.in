@@ -1,0 +1,70 @@
+package @PACKAGE_NAME@;
+
+import android.app.Activity;
+import android.content.ActivityNotFoundException;
+import android.content.Intent;
+import android.speech.RecognizerIntent;
+import java.util.ArrayList;
+import java.util.Locale;
+import org.json.JSONObject;
+
+/**
+ * System speech recognizer as an optional asynchronous Android API.
+ * Launches the device recognizer UI, never records or uploads audio itself.
+ */
+public final class VoiceBridge {
+    private final Activity activity;
+    private final AsyncBridge asyncBridge;
+
+    public VoiceBridge(Activity activity, AsyncBridge asyncBridge) {
+        this.activity = activity;
+        this.asyncBridge = asyncBridge;
+    }
+
+    public boolean recognize(long requestId, long generation, String json) {
+        if (!asyncBridge.begin(requestId, generation)) return false;
+        final JSONObject options;
+        try {
+            options = new JSONObject(json == null ? "{}" : json);
+        } catch (Exception error) {
+            asyncBridge.reject(requestId, generation, "INVALID_ARGUMENT", "Invalid voice options");
+            return true;
+        }
+        activity.runOnUiThread(() -> {
+            Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            String language = options.optString("language", "").trim();
+            if (!language.isEmpty()) intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, language);
+            String prompt = options.optString("prompt", "").trim();
+            if (!prompt.isEmpty()) intent.putExtra(RecognizerIntent.EXTRA_PROMPT, prompt);
+            int code = asyncBridge.registerActivityResult(generation, (resultCode, data) -> {
+                if (resultCode != Activity.RESULT_OK || data == null) {
+                    asyncBridge.resolve(requestId, generation, null);
+                    return;
+                }
+                ArrayList<String> matches = data.getStringArrayListExtra(
+                    RecognizerIntent.EXTRA_RESULTS);
+                asyncBridge.resolve(requestId, generation,
+                    matches == null || matches.isEmpty() ? null : matches.get(0));
+            });
+            if (code < 0) {
+                asyncBridge.reject(requestId, generation, "BUSY",
+                    "Cannot register voice recognition result");
+                return;
+            }
+            try {
+                activity.startActivityForResult(intent, code);
+            } catch (ActivityNotFoundException error) {
+                asyncBridge.unregisterActivityResult(code);
+                asyncBridge.reject(requestId, generation, "VOICE_UNAVAILABLE",
+                    "No system speech recognizer is installed");
+            } catch (Exception error) {
+                asyncBridge.unregisterActivityResult(code);
+                asyncBridge.reject(requestId, generation, "VOICE_FAILED",
+                    "Could not start speech recognition");
+            }
+        });
+        return true;
+    }
+}

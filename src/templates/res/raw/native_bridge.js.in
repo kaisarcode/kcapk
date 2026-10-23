@@ -300,6 +300,17 @@
                 }
             },
             // @KCAPK_END_API@
+            // @KCAPK_API:voice@
+            voice: {
+                recognize: function (options) {
+                    return asyncRequest(function (requestId, generation) {
+                        return window.AndroidBridge.voiceRecognize(
+                            requestId, generation, JSON.stringify(options || {})
+                        );
+                    });
+                }
+            },
+            // @KCAPK_END_API@
             // @KCAPK_API:screen@
             screen: {
                 keepOn: function (enabled) {
