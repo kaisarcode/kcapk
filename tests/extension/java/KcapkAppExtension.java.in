@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** Simple application-owned extension for the KCAPK integration APK. */
 public final class KcapkAppExtension {
@@ -14,7 +15,7 @@ public final class KcapkAppExtension {
     }
 
     public void attach() {
-        webView.addJavascriptInterface(new TestExtensionBridge(webView), "KcapkTestExtension");
+        webView.addJavascriptInterface(new TestExtensionBridge(), "KcapkTestExtension");
     }
 
     public boolean onActivityResult(int requestCode, int resultCode, Intent data) {
@@ -30,15 +31,14 @@ public final class KcapkAppExtension {
     }
 
     public static final class TestExtensionBridge {
-        private final WebView webView;
-        public TestExtensionBridge(WebView webView) { this.webView = webView; }
+        private final AtomicInteger callCount = new AtomicInteger();
 
+        // JavascriptInterface methods execute on the WebView bridge thread,
+        // not the Android UI thread. This diagnostic has no privileged access
+        // and deliberately does not touch WebView state.
         @JavascriptInterface
         public String ping() {
-            String url = webView.getUrl();
-            return url != null && (url.startsWith("file:///android_asset/")
-                || url.startsWith("https://appassets.androidplatform.net/"))
-                ? "App extension OK" : "Untrusted page";
+            return "Custom app API OK (" + callCount.incrementAndGet() + ")";
         }
     }
 }

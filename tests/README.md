@@ -47,6 +47,6 @@ The Android build workspaces are created in temporary directories and removed wh
 The full test APK additionally enables `voice`, locally packaged HTTPS
 assets and a sample native extension. The UI exercises native speech-to-text,
 Web Speech microphone capture, HTML file inputs, secure-origin navigation,
-and the app-provided JavaScript bridge. Recognition depends on device services.
+and the app-provided JavaScript bridge. **Native extension** shows a toast with the Java reply and increasing call count. **Secure local assets** shows a toast after the HTTPS version of the packaged page has loaded. Recognition depends on device services.
 The extension fixture includes a Java hook, a resource, and manifest fragments.
 These extras remain absent from the core-only build.

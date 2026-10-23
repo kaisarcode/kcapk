@@ -125,4 +125,4 @@ Return to the complete [Documentation index](../README.md#documentation).
 The full integration APK enables `--api voice`, `--local-https-assets` and
 `--extension tests/extension`. Use the **Native voice**, **Web Speech**,
 **HTML file input**, **Secure local assets**, and **Native extension** buttons
-on a device. Voice recognition may need a speech service and network connection.
+on a device. The native-extension button shows a Java-generated toast with a call counter; the HTTPS button confirms loading through a toast on the destination page. Voice recognition may need a speech service and network connection.
