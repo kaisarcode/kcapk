@@ -10,7 +10,7 @@ Pass a local HTML entry file with `--webview-url`:
 ./build.sh --webview-url ./web/index.html
 ```
 
-KCAPK copies the complete containing directory into the generated Android `assets/` directory and changes the startup URL to the corresponding `file:///android_asset/...` URL.
+KCAPK copies the complete containing directory into the generated Android `assets/` directory. By default the startup URL is the corresponding `file:///android_asset/...` URL. With `--local-https-assets`, it is instead the equivalent local HTTPS URL.
 
 For example:
 
@@ -31,9 +31,11 @@ Packaged local assets are trusted automatically for `NativeBridge` access.
 Pass `--local-https-assets` to serve packaged resources at
 `https://appassets.androidplatform.net/<path>` without network access.
 This opt-in origin enables browser capabilities restricted to secure contexts.
-The starting local `--webview-url` still loads through `file:///android_asset/`;
-the app explicitly navigates to the HTTPS page when appropriate. The origin is
-added to the trusted NativeBridge set only for that build.
+When `--webview-url` points to a local HTML file, this option launches it
+directly under the HTTPS origin. KCAPK packages the containing directory and
+serves it from the APK, without any redirect or migration page. Without the
+option, KCAPK retains its normal `file:///android_asset/` startup URL.
+The HTTPS origin is added to the trusted NativeBridge set only when enabled.
 
 The generated WebChromeClient handles `<input type="file">` with Android's
 document picker and evaluates browser microphone permission requests. Audio

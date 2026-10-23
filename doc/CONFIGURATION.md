@@ -351,8 +351,9 @@ JavaScript interface as proof of origin authorization.
 For local packaged content that needs a browser secure context, enable
 `--local-https-assets`. KCAPK serves
 `https://appassets.androidplatform.net/<file>` directly from the packaged APK.
-This flag does not change the initial startup URL and does not fetch a server.
-The application may navigate from a packaged `file://` page to the local HTTPS
-origin, for example when preserving legacy IndexedDB data during a migration.
+When `--webview-url` names a local HTML file, this flag loads that file
+directly through the synthetic HTTPS origin. No redirect, staging page, or
+network request is necessary. Without the flag, local apps continue loading
+from `file:///android_asset/`.
 
 See [WebView](WEBVIEW.md) and [Voice](apis/voice.md).

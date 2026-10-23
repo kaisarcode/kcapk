@@ -86,7 +86,7 @@ Its controls cover:
 - keep-screen-on behavior,
 - native speech recognition and Web Speech microphone permission,
 - HTML file input via Android's document picker,
-- packaged HTTPS asset navigation,
+- direct packaged HTTPS asset startup,
 - app-specific native extension bridge.
 
 Interactive results are surfaced with Android toasts.
@@ -125,4 +125,4 @@ Return to the complete [Documentation index](../README.md#documentation).
 The full integration APK enables `--api voice`, `--local-https-assets` and
 `--extension tests/extension`. Use the **Native voice**, **Web Speech**,
 **HTML file input**, **Secure local assets**, and **Native extension** buttons
-on a device. The native-extension button shows a Java-generated toast with a call counter; the HTTPS button confirms loading through a toast on the destination page. Voice recognition may need a speech service and network connection.
+on a device. The native-extension button shows a Java-generated toast with a call counter; the HTTPS button confirms that the initial page was loaded directly through KCAPK's secure local origin. Voice recognition may need a speech service and network connection.

@@ -191,6 +191,10 @@ grep -q 'LOCAL_HTTPS_ASSETS = true' "$GENERATED_JAVA/MainActivity.java" || {
     echo "Error: local HTTPS asset support missing." >&2
     exit 1
 }
+grep -Fq 'WEBVIEW_URL = "https://appassets.androidplatform.net/index.html"' "$GENERATED_JAVA/MainActivity.java" || {
+    echo "Error: secure local assets were not selected as the startup page." >&2
+    exit 1
+}
 grep -q 'TestExtensionBridge' "$GENERATED_JAVA/KcapkAppExtension.java" || {
     echo "Error: custom native extension missing." >&2
     exit 1
@@ -301,6 +305,10 @@ else
     exit 1
 fi
 
+grep -Fq 'WEBVIEW_URL = "file:///android_asset/index.html"' "$CORE_GENERATED_JAVA/MainActivity.java" || {
+    echo "Error: core-only builds must continue to load local file assets." >&2
+    exit 1
+}
 [ -f "$CORE_BRIDGE_JS" ] || {
     echo "Error: core-only NativeBridge resource was not generated." >&2
     exit 1

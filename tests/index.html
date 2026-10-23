@@ -434,12 +434,7 @@
         }
 
         document.getElementById("https-assets").addEventListener("click", function () {
-            if (onLocalHttpsAssets()) {
-                toast("Local HTTPS assets OK");
-                return;
-            }
-            toast("Loading packaged HTTPS assets...");
-            location.href = "https://appassets.androidplatform.net/index.html#kcapk-https-test";
+            toast(onLocalHttpsAssets() ? "Local HTTPS assets OK" : "Local HTTPS assets unavailable");
         });
 
         document.getElementById("test-extension").addEventListener("click", function () {
@@ -557,21 +552,6 @@
         });
         consumeIncomingShare();
 
-        // The HTTPS test navigates to a new WebView page. Confirm arrival on
-        // that page after KCAPK has installed its NativeBridge, using a toast.
-        if (location.hash === "#kcapk-https-test" && onLocalHttpsAssets()) {
-            var httpsToastAttempts = 0;
-            function reportHttpsLoaded() {
-                if (window.NativeBridge && NativeBridge.__kcapk
-                    && NativeBridge.__generation > 0) {
-                    toast("Local HTTPS assets OK");
-                    history.replaceState(null, "", location.pathname);
-                } else if (httpsToastAttempts++ < 40) {
-                    setTimeout(reportHttpsLoaded, 100);
-                }
-            }
-            reportHttpsLoaded();
-        }
     </script>
 </body>
 </html>

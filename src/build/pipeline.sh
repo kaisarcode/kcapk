@@ -111,7 +111,11 @@ prepare_web_assets () {
         echo "Detected local project path: $ORIGINAL_WEBVIEW_URL. Copying entire project from $SOURCE_DIR to assets."
         cp -r "$SOURCE_DIR/." "$ASSETS_DIR/" || { echo "Error: Failed to copy local HTML assets from $SOURCE_DIR." ; exit 1; }
 
-        WEBVIEW_URL="file:///android_asset/$FILENAME"
+        if [ "$LOCAL_HTTPS_ASSETS" = true ]; then
+            WEBVIEW_URL="https://appassets.androidplatform.net/$FILENAME"
+        else
+            WEBVIEW_URL="file:///android_asset/$FILENAME"
+        fi
         echo "Updated WEBVIEW_URL to: $WEBVIEW_URL"
     fi
 
