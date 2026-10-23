@@ -26,6 +26,27 @@ Using `web/index.html` packages the entire `web/` directory, so relative referen
 
 Packaged local assets are trusted automatically for `NativeBridge` access.
 
+## Secure HTTPS origin for local assets
+
+Pass `--local-https-assets` to serve packaged resources at
+`https://appassets.androidplatform.net/<path>` without network access.
+This opt-in origin enables browser capabilities restricted to secure contexts.
+The starting local `--webview-url` still loads through `file:///android_asset/`;
+the app explicitly navigates to the HTTPS page when appropriate. The origin is
+added to the trusted NativeBridge set only for that build.
+
+The generated WebChromeClient handles `<input type="file">` with Android's
+document picker and evaluates browser microphone permission requests. Audio
+capture is granted only when the active WebView page is trusted, its origin
+matches the requesting frame and Android has already granted `RECORD_AUDIO`.
+Other WebView media requests are denied. Enable `--api permissions` and declare
+`--permission microphone` if the app needs to request Android microphone access.
+
+This is separate from `--api voice`, which starts the Android system speech
+recognizer through an explicit asynchronous native API. Browser Web Speech
+support and network/offline behavior depend on the installed WebView and speech
+service.
+
 ## Remote content
 
 A remote application can be used directly:

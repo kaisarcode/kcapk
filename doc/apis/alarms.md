@@ -60,13 +60,26 @@ If the notification action has no `id`, KCAPK uses the alarm ID.
 
 ## Persistence and reboot
 
-Scheduled definitions are stored in `SharedPreferences`. Future alarms are restored after device boot. Past alarms are discarded during restoration.
+Scheduled definitions are stored in `SharedPreferences`. Future alarms are restored after device boot. For recurring alarms whose old time elapsed while Android was stopped, KCAPK advances to the next future local occurrence and persists that timestamp. One-time alarms in the past are discarded.
 
 The alarm fires natively even if the WebView is not alive.
 
 ## Recurrence
 
-KCAPK does not implement recurrence rules. The application calculates future occurrences and schedules the corresponding native alarms.
+KCAPK supports two optional repeat modes in `recurrence`: `daily` and `weekdays`, each with numeric `hour` (0–23) and `minute` (0–59). The application selects and persists the schedule policy when submitting an alarm. On delivery, KCAPK posts the notification and schedules the next local-day occurrence without requiring the WebView to remain open.
+
+```js
+NativeBridge.Android.alarms.schedule({
+    id: 20,
+    at: nextOccurrenceInMilliseconds,
+    exact: NativeBridge.Android.alarms.canScheduleExact(),
+    allowWhileIdle: true,
+    recurrence: { mode: "weekdays", hour: 9, minute: 30 },
+    action: { type: "notification", channel: "tasks", title: "Review tasks" }
+});
+```
+
+An alarm without `recurrence` remains one-time. Scheduling exactness depends on Android special access and can fall back to a permitted inexact alarm.
 
 ## Cancel
 

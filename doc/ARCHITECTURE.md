@@ -78,6 +78,21 @@ The shared async implementation is included only when `--exec` or an enabled asy
 
 See [Android APIs](ANDROID_APIS.md) and the [detailed API reference](apis/README.md).
 
+## Application native extensions
+
+`--extension <directory>` composes independent app-owned Java classes,
+resources, and optional Manifest declarations into the staged template tree.
+The generator never edits canonical KCAPK sources. A default no-op
+`KcapkAppExtension` provides scoped lifecycle callbacks and can be replaced by
+the application; core KCAPK classes remain unmodifiable by extensions.
+This allows specialized integrations without expanding the generic API catalog
+or copying the entire builder. APIs of general utility should still be added
+as explicit `--api` modules with JavaScript namespaces and pruning rules.
+
+The optional `--local-https-assets` adapts packaged local assets to a trusted
+HTTPS browser origin. The WebChromeClient separately owns HTML file selection
+and trusted browser microphone permission handling.
+
 ## Generated application
 
 The generated application is a native Android Activity containing a WebView.

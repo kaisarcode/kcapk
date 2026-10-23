@@ -6,7 +6,7 @@ KCAPK builds Android applications directly from the command line, with a focus o
 
 No Android Studio or Gradle project is required.
 
-A KCAPK application can load either packaged local web content or a remote web application. Trusted WebView content can also use `NativeBridge` to access selected Android capabilities, and applications can optionally package native command-line executables for controlled use from JavaScript.
+A KCAPK application can load either packaged local web content or a remote web application. Trusted WebView content can use `NativeBridge` for selected Android capabilities including optional system voice recognition. Applications can compose native Java extensions through `--extension` without patching KCAPK templates, enable a local secure HTTPS asset origin, and package command-line executables for controlled use from JavaScript.
 
 KCAPK currently targets Android SDK 24-36.
 

@@ -58,6 +58,7 @@ Permissions remain separate from API selection. For example:
 | `--api system-ui` | `NativeBridge.Android.systemUI.*` | no | System-bar appearance and visibility. |
 | `--api clipboard` | `NativeBridge.Android.clipboard.*` | no | Clipboard read/write operations. |
 | `--api screen` | `NativeBridge.Android.screen.*` | no | Keep-screen-on behavior. |
+| `--api voice` | `NativeBridge.Android.voice.*` | no | System speech-to-text via the device recognizer. |
 
 ## Internal dependencies
 
@@ -67,7 +68,7 @@ Internal dependencies are selected automatically. Applications only choose publi
 
 ## Async APIs
 
-Operations that wait for Android work or user interaction use the shared Promise layer. Current examples include permissions, file selection, launcher app discovery, app icon lookup, and resource lookup.
+Operations that wait for Android work or user interaction use the shared Promise layer. Current examples include permissions, file selection, voice recognition, launcher app discovery, app icon lookup, and resource lookup.
 
 See [Async operations](ASYNC.md) for request IDs, page generations, lifecycle behavior, and the common error model.
 
@@ -78,6 +79,8 @@ API selection is separate from trusted-origin enforcement. An enabled API is sti
 See [WebView and trusted origins](WEBVIEW.md) and [NativeBridge](NATIVE_BRIDGE.md).
 
 ## Adding APIs
+
+An app may supply isolated native extensions using `--extension` without altering KCAPK templates. App-specific bridge calls are not automatically part of the public `NativeBridge.Android` catalog; general-use features such as voice belong here as opt-in APIs.
 
 New Android integrations should remain general-purpose, live under `NativeBridge.Android`, use a dedicated bridge class when non-trivial, and be opt-in unless they belong to the deliberately small core.
 

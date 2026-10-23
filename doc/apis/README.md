@@ -20,6 +20,7 @@ Only `showToast()` is part of the always-present core. Every other capability is
 | [Resources](resources.md) | `--api resources` | `NativeBridge.Android.resources.*` |
 | [System UI](system-ui.md) | `--api system-ui` | `NativeBridge.Android.systemUI.*` |
 | [Clipboard](clipboard.md) | `--api clipboard` | `NativeBridge.Android.clipboard.*` |
+| [Voice](voice.md) | `--api voice` | `NativeBridge.Android.voice.*` |
 | [Screen](screen.md) | `--api screen` | `NativeBridge.Android.screen.*` |
 
 ## Activation model

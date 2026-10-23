@@ -25,6 +25,8 @@ command-line option > environment variable > built-in default
 | --permission <name> | Declare an optional Android permission; repeatable. |
 | --share-target <mime> | Accept incoming Android shares for a MIME type; repeatable. Requires --api intents. |
 | --fullscreen | Enable fullscreen mode. |
+| --local-https-assets | Enable the packaged HTTPS asset origin for secure WebView APIs. |
+| --extension <dir> | Compose application-owned native Java, resources and manifest declarations; repeatable. |
 | --version-code <N> | Android version code. |
 | --version-name <name> | Android version name. |
 | --exec <path> | Package one native executable; repeatable. |
@@ -44,6 +46,7 @@ ICON_BACKGROUND="#000000"
 BACKGROUND="#101010"
 TRUSTED_ORIGINS=""
 IS_FULLSCREEN="false"
+LOCAL_HTTPS_ASSETS="false"
 VERSION_CODE=1
 VERSION_NAME="1.0"
 ```
@@ -173,6 +176,7 @@ resources
 system-ui
 clipboard
 screen
+voice
 ```
 
 `systemUI` is also accepted as an alias for `system-ui`, but `system-ui` is the canonical command-line spelling.
@@ -182,6 +186,8 @@ Disabled APIs are removed from the generated Java sources and from the generated
 Internal dependencies are resolved automatically. For example, alarms include the native notification implementation needed by the alarm receiver without exposing the public notifications namespace unless `--api notifications` was also requested.
 
 `NativeBridge.exec()` is separate from Android API selection and is generated automatically when at least one `--exec` binary is packaged.
+
+Native system speech recognition is enabled with `--api voice` and does not automatically grant browser microphone permission. Browser Web Speech additionally requires WebView support and an explicit Android microphone grant.
 
 See [Android APIs](ANDROID_APIS.md) for the catalog and [API reference](apis/README.md) for detailed pages.
 
@@ -310,3 +316,43 @@ See [Release builds](RELEASES.md).
 ## Next step
 
 Continue with [WebView and trusted origins](WEBVIEW.md).
+
+## Native application extensions
+
+KCAPK's `--extension /absolute/path` option composes app-owned Android code
+without modifying or duplicating KCAPK's internal templates. Repeat the flag
+for independent extension directories. An extension may contain:
+
+```text
+java/FeatureBridge.java.in
+java/KcapkAppExtension.java.in       # optional lifecycle composition hook
+res/raw/feature_sound.mp3
+manifest/permissions.xml            # optional uses-permission XML nodes
+manifest/components.xml             # optional application children (receiver, metadata...)
+```
+
+Java templates use the standard `@PACKAGE_NAME@` variable. KCAPK processes
+these files in the normal generator before compiling Java and Android resources.
+The only replaceable KCAPK class is `KcapkAppExtension.java.in`; other
+internal templates cannot be overwritten by extensions.
+
+The extension hook is constructed with `(Activity, WebView)` and has four
+methods: `attach()`, `onActivityResult(requestCode, resultCode, data)`,
+`onBackPressed()` and `destroy()`. It can delegate to independently owned
+native adapters. The default no-op hook keeps extensions optional. The
+extension's `onActivityResult` and `onBackPressed` return `true` when they
+consume the operation. KCAPK uses its own normal callbacks otherwise.
+
+`addJavascriptInterface` exposes methods to frames in the WebView. Any
+extension bridge must validate the intended application's active page and
+expose only narrowly authorized operations. Do not treat merely having a
+JavaScript interface as proof of origin authorization.
+
+For local packaged content that needs a browser secure context, enable
+`--local-https-assets`. KCAPK serves
+`https://appassets.androidplatform.net/<file>` directly from the packaged APK.
+This flag does not change the initial startup URL and does not fetch a server.
+The application may navigate from a packaged `file://` page to the local HTTPS
+origin, for example when preserving legacy IndexedDB data during a migration.
+
+See [WebView](WEBVIEW.md) and [Voice](apis/voice.md).
