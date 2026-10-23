@@ -1,0 +1,44 @@
+package @PACKAGE_NAME@;
+
+import android.app.Activity;
+import android.content.Intent;
+import android.webkit.JavascriptInterface;
+import android.webkit.WebView;
+
+/** Simple application-owned extension for the KCAPK integration APK. */
+public final class KcapkAppExtension {
+    private final WebView webView;
+
+    public KcapkAppExtension(Activity activity, WebView webView) {
+        this.webView = webView;
+    }
+
+    public void attach() {
+        webView.addJavascriptInterface(new TestExtensionBridge(webView), "KcapkTestExtension");
+    }
+
+    public boolean onActivityResult(int requestCode, int resultCode, Intent data) {
+        return false;
+    }
+
+    public boolean onBackPressed() {
+        return false;
+    }
+
+    public void destroy() {
+        webView.removeJavascriptInterface("KcapkTestExtension");
+    }
+
+    public static final class TestExtensionBridge {
+        private final WebView webView;
+        public TestExtensionBridge(WebView webView) { this.webView = webView; }
+
+        @JavascriptInterface
+        public String ping() {
+            String url = webView.getUrl();
+            return url != null && (url.startsWith("file:///android_asset/")
+                || url.startsWith("https://appassets.androidplatform.net/"))
+                ? "App extension OK" : "Untrusted page";
+        }
+    }
+}

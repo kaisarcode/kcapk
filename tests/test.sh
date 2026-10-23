@@ -47,6 +47,9 @@ if "$ROOT_DIR/build.sh" \
     --api system-ui \
     --api clipboard \
     --api screen \
+    --api voice \
+    --local-https-assets \
+    --extension "$TEST_DIR/extension" \
     --permission notifications \
     --permission exactAlarm \
     --permission camera \
@@ -111,13 +114,13 @@ grep -q 'intentConsumeShare' "$GENERATED_BRIDGE_JS" || {
     echo "Error: incoming share API was not generated." >&2
     exit 1
 }
-for NAMESPACE in permissions notifications alarms haptics intents files apps resources systemUI clipboard screen; do
+for NAMESPACE in permissions notifications alarms haptics intents files apps resources systemUI clipboard screen voice; do
     grep -q "$NAMESPACE:" "$GENERATED_BRIDGE_JS" || {
         echo "Error: NativeBridge.Android.$NAMESPACE namespace was not generated." >&2
         exit 1
     }
 done
-for CLASS in AsyncBridge ExecBridge PermissionBridge NotificationBridge AlarmBridge AlarmReceiver AlarmRestoreReceiver HapticBridge IntentBridge FileBridge AppBridge ResourceBridge SystemUIBridge ClipboardBridge ScreenBridge; do
+for CLASS in AsyncBridge ExecBridge PermissionBridge NotificationBridge AlarmBridge AlarmReceiver AlarmRestoreReceiver HapticBridge IntentBridge FileBridge AppBridge ResourceBridge SystemUIBridge ClipboardBridge ScreenBridge VoiceBridge; do
     [ -f "$GENERATED_JAVA/$CLASS.java" ] || {
         echo "Error: $CLASS.java was not generated." >&2
         exit 1
@@ -180,6 +183,34 @@ grep -q 'Settings.ACTION_HOME_SETTINGS' "$GENERATED_JAVA/AppBridge.java" || {
     echo "Error: Home settings integration was not generated." >&2
     exit 1
 }
+grep -q 'voiceRecognize' "$GENERATED_BRIDGE_JS" || {
+    echo "Error: native voice JavaScript API missing." >&2
+    exit 1
+}
+grep -q 'LOCAL_HTTPS_ASSETS = true' "$GENERATED_JAVA/MainActivity.java" || {
+    echo "Error: local HTTPS asset support missing." >&2
+    exit 1
+}
+grep -q 'TestExtensionBridge' "$GENERATED_JAVA/KcapkAppExtension.java" || {
+    echo "Error: custom native extension missing." >&2
+    exit 1
+}
+grep -q 'kcapk.extension.test' "$WORK_DIR/AndroidManifest.xml" || {
+    echo "Error: extension component missing." >&2
+    exit 1
+}
+grep -q 'android.permission.ACCESS_WIFI_STATE' "$WORK_DIR/AndroidManifest.xml" || {
+    echo "Error: extension permission missing." >&2
+    exit 1
+}
+[ -f "$WORK_DIR/res/raw/kcapk_extension_marker.txt" ] || {
+    echo "Error: native extension resource missing." >&2
+    exit 1
+}
+grep -q 'nextOccurrence' "$GENERATED_JAVA/AlarmReceiver.java" || {
+    echo "Error: recurring alarm recovery missing." >&2
+    exit 1
+}
 grep -q 'native_bridge' "$GENERATED_JAVA/TrustedWebViewClient.java" || {
     echo "Error: NativeBridge resource loading was not generated." >&2
     exit 1
@@ -240,7 +271,7 @@ if grep -q 'android.permission.QUERY_ALL_PACKAGES' "$WORK_DIR/AndroidManifest.xm
     echo "Error: QUERY_ALL_PACKAGES must not be declared for launcher app listing." >&2
     exit 1
 fi
-if grep -q '@PERMISSIONS@\|@SHARE_TARGETS@\|@KCAPK_API:\|@KCAPK_END_API@' "$WORK_DIR/AndroidManifest.xml"; then
+if grep -q '@PERMISSIONS@\|@SHARE_TARGETS@\|@EXTENSION_PERMISSIONS@\|@EXTENSION_COMPONENTS@\|@KCAPK_API:\|@KCAPK_END_API@' "$WORK_DIR/AndroidManifest.xml"; then
     echo "Error: manifest template marker was not rendered." >&2
     exit 1
 fi
@@ -278,7 +309,7 @@ grep -q 'showToast' "$CORE_BRIDGE_JS" || {
     echo "Error: core-only bridge does not expose showToast." >&2
     exit 1
 }
-for NAMESPACE in permissions notifications alarms haptics intents files apps resources systemUI clipboard screen; do
+for NAMESPACE in permissions notifications alarms haptics intents files apps resources systemUI clipboard screen voice; do
     if grep -q "$NAMESPACE:" "$CORE_BRIDGE_JS"; then
         echo "Error: core-only bridge unexpectedly exposes $NAMESPACE." >&2
         exit 1
@@ -288,7 +319,7 @@ if grep -q 'AndroidBridge.exec' "$CORE_BRIDGE_JS"; then
     echo "Error: core-only bridge unexpectedly exposes NativeBridge.exec." >&2
     exit 1
 fi
-for CLASS in AsyncBridge ExecBridge PermissionBridge NotificationBridge AlarmBridge AlarmReceiver AlarmRestoreReceiver HapticBridge IntentBridge FileBridge AppBridge ResourceBridge SystemUIBridge ClipboardBridge ScreenBridge; do
+for CLASS in AsyncBridge ExecBridge PermissionBridge NotificationBridge AlarmBridge AlarmReceiver AlarmRestoreReceiver HapticBridge IntentBridge FileBridge AppBridge ResourceBridge SystemUIBridge ClipboardBridge ScreenBridge VoiceBridge; do
     if [ -f "$CORE_GENERATED_JAVA/$CLASS.java" ]; then
         echo "Error: core-only build unexpectedly generated $CLASS.java." >&2
         exit 1
@@ -304,7 +335,7 @@ if grep -q 'AlarmReceiver\|android.intent.category.HOME\|android.intent.action.S
     echo "Error: core-only manifest contains optional Android components." >&2
     exit 1
 fi
-if grep -q '@PERMISSIONS@\|@SHARE_TARGETS@\|@KCAPK_API:\|@KCAPK_END_API@' "$CORE_WORK_DIR/AndroidManifest.xml"; then
+if grep -q '@PERMISSIONS@\|@SHARE_TARGETS@\|@EXTENSION_PERMISSIONS@\|@EXTENSION_COMPONENTS@\|@KCAPK_API:\|@KCAPK_END_API@' "$CORE_WORK_DIR/AndroidManifest.xml"; then
     echo "Error: core-only manifest contains unresolved template markers." >&2
     exit 1
 fi

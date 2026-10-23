@@ -83,7 +83,11 @@ Its controls cover:
 - incoming Android shares,
 - launcher-app discovery and launching,
 - Home launcher candidacy/settings,
-- keep-screen-on behavior.
+- keep-screen-on behavior,
+- native speech recognition and Web Speech microphone permission,
+- HTML file input via Android's document picker,
+- packaged HTTPS asset navigation,
+- app-specific native extension bridge.
 
 Interactive results are surfaced with Android toasts.
 
@@ -117,3 +121,8 @@ When adding a NativeBridge Android API, update its `doc/apis/` reference page an
 ## Next step
 
 Return to the complete [Documentation index](../README.md#documentation).
+
+The full integration APK enables `--api voice`, `--local-https-assets` and
+`--extension tests/extension`. Use the **Native voice**, **Web Speech**,
+**HTML file input**, **Secure local assets**, and **Native extension** buttons
+on a device. Voice recognition may need a speech service and network connection.

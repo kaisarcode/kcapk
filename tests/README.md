@@ -43,3 +43,10 @@ kcapk external executable OK
 The test UI also covers parallel executables, asynchronous permissions, file picking and sharing, launcher-app discovery and launching, and enabling the generated app as an Android Home candidate. The Home alias is disabled by default; **Home settings** opens Android's launcher selection screen after the candidate is enabled.
 
 The Android build workspaces are created in temporary directories and removed when the test finishes. Only `tests/test.apk` is kept as the generated test artifact.
+
+The full test APK additionally enables `voice`, locally packaged HTTPS
+assets and a sample native extension. The UI exercises native speech-to-text,
+Web Speech microphone capture, HTML file inputs, secure-origin navigation,
+and the app-provided JavaScript bridge. Recognition depends on device services.
+The extension fixture includes a Java hook, a resource, and manifest fragments.
+These extras remain absent from the core-only build.

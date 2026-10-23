@@ -247,6 +247,27 @@
                     <span class="button-title">Notifications permission</span>
                     <span class="button-detail">Async Android permission result</span>
                 </button>
+                <button id="native-voice" type="button">
+                    <span class="button-title">Native voice</span>
+                    <span class="button-detail">NativeBridge.Android.voice.recognize()</span>
+                </button>
+                <button id="browser-voice" type="button">
+                    <span class="button-title">Web Speech</span>
+                    <span class="button-detail">WebView microphone request</span>
+                </button>
+                <button id="web-file-picker" type="button">
+                    <span class="button-title">HTML file input</span>
+                    <span class="button-detail">Android document chooser</span>
+                </button>
+                <button id="https-assets" type="button">
+                    <span class="button-title">Secure local assets</span>
+                    <span class="button-detail">Load local HTTPS origin</span>
+                </button>
+                <button id="test-extension" type="button">
+                    <span class="button-title">Native extension</span>
+                    <span class="button-detail">Custom app API</span>
+                </button>
+                <input id="web-file-input" type="file" accept="image/*" hidden>
                 <button id="clipboard-test" type="button">
                     <span class="button-title">Clipboard</span>
                     <span class="button-detail">Write and read text</span>
@@ -373,6 +394,45 @@
             } catch (error) {
                 toast(errorText(error));
             }
+        });
+
+        document.getElementById("native-voice").addEventListener("click", async function () {
+            try {
+                var text = await NativeBridge.Android.voice.recognize({ language: "en-US" });
+                toast(text ? "Recognized: " + text : "Voice cancelled");
+            } catch (error) {
+                toast(errorText(error));
+            }
+        });
+
+        document.getElementById("browser-voice").addEventListener("click", async function () {
+            var Recognizer = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!Recognizer) { toast("Web Speech unsupported"); return; }
+            try {
+                var allowed = await NativeBridge.Android.permissions.request("microphone");
+                if (!allowed) { toast("Microphone denied"); return; }
+                var recognizer = new Recognizer();
+                recognizer.lang = "en-US";
+                recognizer.onresult = function (e) { toast("Web Speech: " + e.results[0][0].transcript); };
+                recognizer.onerror = function (e) { toast("Web Speech: " + e.error); };
+                recognizer.start();
+            } catch (error) { toast(errorText(error)); }
+        });
+
+        document.getElementById("web-file-picker").addEventListener("click", function () {
+            document.getElementById("web-file-input").click();
+        });
+        document.getElementById("web-file-input").addEventListener("change", function (e) {
+            var file = e.target.files && e.target.files[0];
+            toast(file ? "HTML input: " + file.name : "No file selected");
+        });
+
+        document.getElementById("https-assets").addEventListener("click", function () {
+            location.href = "https://appassets.androidplatform.net/index.html";
+        });
+
+        document.getElementById("test-extension").addEventListener("click", function () {
+            toast(window.KcapkTestExtension ? window.KcapkTestExtension.ping() : "Extension unavailable");
         });
 
         document.getElementById("clipboard-test").addEventListener("click", function () {
