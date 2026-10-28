@@ -44,11 +44,11 @@ Internal dependencies are selected automatically and do not expose extra public 
 
 ## Common rules
 
-All APIs are available only to trusted top-level WebView content. See [WebView and trusted origins](../WEBVIEW.md).
+All APIs are available only to trusted top-level WebView content. See [WebView and trusted origins](../webview.md).
 
-Methods are synchronous unless their page explicitly says they return a Promise. Promise behavior, page-generation protection, and common error codes are documented in [Async operations](../ASYNC.md).
+Methods are synchronous unless their page explicitly says they return a Promise. Promise behavior, page-generation protection, and common error codes are documented in [Async operations](../async.md).
 
-`NativeBridge.exec()` is outside this directory because it is a KCAPK executable facility rather than an Android namespace. See [External binaries](../EXTERNAL_BINARIES.md).
+`NativeBridge.exec()` is outside this directory because it is a KCAPK executable facility rather than an Android namespace. See [External binaries](../external_binaries.md).
 
 ## Documentation convention
 
