@@ -40,4 +40,4 @@ browser microphone path: `--local-https-assets`, `--api permissions`, and
 `--permission microphone`. The app should request the runtime permission
 before calling `SpeechRecognition`. Browser support varies by device.
 
-See [WebView](../WEBVIEW.md) and [Async operations](../ASYNC.md).
+See [WebView](../webview.md) and [Async operations](../async.md).
