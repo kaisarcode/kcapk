@@ -80,4 +80,4 @@ Only one runtime permission request and one exact-alarm special-access request m
 
 Permission requests use KCAPK's shared Promise/page-generation infrastructure. Results from an older WebView page are not delivered into a newer page.
 
-See [Async operations](../ASYNC.md).
+See [Async operations](../async.md).
