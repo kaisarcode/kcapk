@@ -227,4 +227,5 @@ See [Testing](TESTING.md).
 
 ## Next step
 
-Continue with [Release builds](RELEASES.md).
+- [Release builds](RELEASES.md) - package and sign the completed application.
+- [Advanced documentation](advanced/index.md) - explore integration and testing details.
