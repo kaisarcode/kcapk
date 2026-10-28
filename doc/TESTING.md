@@ -118,11 +118,12 @@ Other device-dependent checks include vibration hardware, exact-alarm special ac
 
 When adding a NativeBridge Android API, update its `doc/apis/` reference page and add both positive selection and pruning coverage when practical.
 
-## Next step
-
-Return to the complete [Documentation index](../README.md#documentation).
-
 The full integration APK enables `--api voice`, `--local-https-assets` and
 `--extension tests/extension`. Use the **Native voice**, **Web Speech**,
 **HTML file input**, **Secure local assets**, and **Native extension** buttons
 on a device. The native-extension button shows a Java-generated toast with a call counter; the HTTPS button confirms that the initial page was loaded directly through KCAPK's secure local origin. Voice recognition may need a speech service and network connection.
+
+## Next step
+
+- [Advanced documentation](advanced/index.md) - explore the architecture and integration guides.
+- [Project README](../README.md) - return to the main documentation.
