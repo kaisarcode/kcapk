@@ -142,7 +142,7 @@ Remote bridge access can be extended with repeated options:
 
 The `TRUSTED_ORIGINS` environment variable remains available as a whitespace-separated fallback.
 
-See [WebView and trusted origins](WEBVIEW.md) for the trust model.
+See [WebView and trusted origins](webview.md) for the trust model.
 
 ## NativeBridge API selection
 
@@ -189,7 +189,7 @@ Internal dependencies are resolved automatically. For example, alarms include th
 
 Native system speech recognition is enabled with `--api voice` and does not automatically grant browser microphone permission. Browser Web Speech additionally requires WebView support and an explicit Android microphone grant.
 
-See [Android APIs](ANDROID_APIS.md) for the catalog and [API reference](apis/README.md) for detailed pages.
+See [Android APIs](android_apis.md) for the catalog and [API reference](apis/readme.md) for detailed pages.
 
 ## Android permissions
 
@@ -298,7 +298,7 @@ See [Intents](apis/intents.md).
     --exec /path/to/x86_64/tool
 ```
 
-See [External binaries](EXTERNAL_BINARIES.md).
+See [External binaries](external_binaries.md).
 
 ## Release settings
 
@@ -311,7 +311,7 @@ RELEASE_STORE_PASS
 RELEASE_KEY_PASS
 ```
 
-See [Release builds](RELEASES.md).
+See [Release builds](releases.md).
 
 ## Native extensions
 
@@ -319,5 +319,5 @@ For application-owned Java code, Android resources, and manifest declarations, s
 
 ## Next step
 
-- [WebView and trusted origins](WEBVIEW.md) - load local or remote pages safely.
-- [Android APIs](ANDROID_APIS.md) - enable platform capabilities when needed.
+- [WebView and trusted origins](webview.md) - load local or remote pages safely.
+- [Android APIs](android_apis.md) - enable platform capabilities when needed.

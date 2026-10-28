@@ -70,13 +70,13 @@ Internal dependencies are selected automatically. Applications only choose publi
 
 Operations that wait for Android work or user interaction use the shared Promise layer. Current examples include permissions, file selection, voice recognition, launcher app discovery, app icon lookup, and resource lookup.
 
-See [Async operations](ASYNC.md) for request IDs, page generations, lifecycle behavior, and the common error model.
+See [Async operations](async.md) for request IDs, page generations, lifecycle behavior, and the common error model.
 
 ## Security boundary
 
 API selection is separate from trusted-origin enforcement. An enabled API is still callable only from WebView content KCAPK considers trusted.
 
-See [WebView and trusted origins](WEBVIEW.md) and [NativeBridge](NATIVE_BRIDGE.md).
+See [WebView and trusted origins](webview.md) and [NativeBridge](native_bridge.md).
 
 ## Adding APIs
 
@@ -88,9 +88,9 @@ Every new public API should also receive a page under `doc/apis/` documenting ac
 
 ## Detailed reference
 
-[Detailed Android API reference](apis/README.md) - one page per optional Android capability with activation, usage, permissions, and platform behavior.
+[Detailed Android API reference](apis/readme.md) - one page per optional Android capability with activation, usage, permissions, and platform behavior.
 
 ## Next step
 
-- [API reference](apis/README.md) - find methods, permissions, and examples.
-- [External binaries](EXTERNAL_BINARIES.md) - run packaged native executables when needed.
+- [API reference](apis/readme.md) - find methods, permissions, and examples.
+- [External binaries](external_binaries.md) - run packaged native executables when needed.

@@ -146,7 +146,7 @@ When the WebView moves to another page, running processes belonging to older pag
 
 When the Activity is destroyed, KCAPK destroys active processes and shuts down the executor.
 
-See [External binaries](EXTERNAL_BINARIES.md) for the complete executable integration model.
+See [External binaries](external_binaries.md) for the complete executable integration model.
 
 ## Permissions
 
@@ -258,5 +258,5 @@ The public API should expose only the natural Promise-returning method, not the 
 
 ## Next step
 
-- [Android API reference](apis/README.md) - inspect individual methods and errors.
+- [Android API reference](apis/readme.md) - inspect individual methods and errors.
 - [Advanced documentation](advanced/index.md) - return to the technical documentation index.

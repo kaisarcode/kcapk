@@ -76,7 +76,7 @@ Internal dependencies do not automatically expose public APIs. For example, alar
 
 The shared async implementation is included only when `--exec` or an enabled asynchronous Android capability requires it.
 
-See [Android APIs](ANDROID_APIS.md) and the [detailed API reference](apis/README.md).
+See [Android APIs](android_apis.md) and the [detailed API reference](apis/readme.md).
 
 ## Application native extensions
 
@@ -118,7 +118,7 @@ This namespace exposes selected Android platform primitives. KCAPK does not atte
 
 Except for the small core, Android APIs are opt-in at build time.
 
-See [Android APIs](ANDROID_APIS.md).
+See [Android APIs](android_apis.md).
 
 ### External native binaries
 
@@ -128,7 +128,7 @@ NativeBridge.exec(...)
 
 This is separate from `NativeBridge.Android` because it does not represent an Android framework API. It is generated only when binaries are explicitly packaged with `--exec` and executes only those packaged binaries.
 
-See [External binaries](EXTERNAL_BINARIES.md).
+See [External binaries](external_binaries.md).
 
 ## Permissions and capabilities
 
@@ -138,7 +138,7 @@ An API controls what native bridge functionality is compiled into the app. A per
 
 This separation avoids silently broadening an application's Manifest simply because KCAPK knows how to expose a related API.
 
-See [Configuration](CONFIGURATION.md) and [Permissions](apis/permissions.md).
+See [Configuration](configuration.md) and [Permissions](apis/permissions.md).
 
 ## Trust boundary
 
@@ -148,7 +148,7 @@ Untrusted top-level navigation is opened outside the application rather than rec
 
 Build-time API pruning and runtime origin trust are complementary: pruning limits which native capabilities exist in the APK, while the trust boundary limits which loaded content may call the capabilities that were included.
 
-See [WebView and trusted origins](WEBVIEW.md).
+See [WebView and trusted origins](webview.md).
 
 ## Application logic
 
@@ -160,5 +160,5 @@ This keeps the builder reusable across unrelated applications.
 
 ## Next step
 
-- [NativeBridge](NATIVE_BRIDGE.md) - understand the native integration boundary.
+- [NativeBridge](native_bridge.md) - understand the native integration boundary.
 - [Advanced documentation](advanced/index.md) - browse related implementation guides.

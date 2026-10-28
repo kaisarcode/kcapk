@@ -37,9 +37,9 @@ directly through the synthetic HTTPS origin. No redirect, staging page, or
 network request is necessary. Without the flag, local apps continue loading
 from `file:///android_asset/`.
 
-See [WebView](../WEBVIEW.md) and [Voice](../apis/voice.md).
+See [WebView](../webview.md) and [Voice](../apis/voice.md).
 
 ## Next step
 
-- [Architecture](../ARCHITECTURE.md) - understand KCAPK's build and integration boundaries.
+- [Architecture](../architecture.md) - understand KCAPK's build and integration boundaries.
 

@@ -119,9 +119,9 @@ NativeBridge.exec(...)
 NativeBridge.Android.*
 ```
 
-See [NativeBridge](NATIVE_BRIDGE.md), [Android APIs](ANDROID_APIS.md), and [External binaries](EXTERNAL_BINARIES.md).
+See [NativeBridge](native_bridge.md), [Android APIs](android_apis.md), and [External binaries](external_binaries.md).
 
 ## Next step
 
-- [Android APIs](ANDROID_APIS.md) - enable native features for trusted pages.
-- [NativeBridge](NATIVE_BRIDGE.md) - understand the bridge security and lifecycle model.
+- [Android APIs](android_apis.md) - enable native features for trusted pages.
+- [NativeBridge](native_bridge.md) - understand the bridge security and lifecycle model.

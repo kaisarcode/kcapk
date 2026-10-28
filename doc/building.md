@@ -100,7 +100,7 @@ If it does not exist, KCAPK creates it automatically.
 ./build.sh --release
 ```
 
-See [Release builds](RELEASES.md) for signing and AAB details.
+See [Release builds](releases.md) for signing and AAB details.
 
 ## Host platform notes
 
@@ -112,5 +112,5 @@ Because the builder intentionally avoids Gradle, compatibility depends directly 
 
 ## Next step
 
-- [Getting started](GETTING_STARTED.md) - build and install your first app.
-- [Configuration](CONFIGURATION.md) - customize the generated application.
+- [Getting started](getting_started.md) - build and install your first app.
+- [Configuration](configuration.md) - customize the generated application.

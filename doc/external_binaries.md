@@ -75,7 +75,7 @@ Invalid argument arrays reject with:
 INVALID_ARGUMENT
 ```
 
-See [Async operations](ASYNC.md) for the common Promise/error model.
+See [Async operations](async.md) for the common Promise/error model.
 
 ## No shell evaluation
 
@@ -223,9 +223,9 @@ The KCAPK integration point begins with the finished executable file.
 
 The repository integration test packages the same fixture executable for multiple ABIs and verifies that the expected entries exist inside the APK. The test application also invokes `NativeBridge.exec()` through the Promise layer and includes a parallel-execution control.
 
-See [Testing](TESTING.md).
+See [Testing](testing.md).
 
 ## Next step
 
-- [Release builds](RELEASES.md) - package and sign the completed application.
+- [Release builds](releases.md) - package and sign the completed application.
 - [Advanced documentation](advanced/index.md) - explore integration and testing details.

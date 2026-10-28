@@ -12,7 +12,7 @@ chmod +x build.sh
 
 KCAPK requires a Java JDK, Android SDK build tools, ImageMagick, and standard command-line utilities. If no Android SDK location is configured, KCAPK can bootstrap the required command-line tools under `~/android-sdk`.
 
-For complete requirements and platform notes, see [Building](BUILDING.md).
+For complete requirements and platform notes, see [Building](building.md).
 
 ## Create a web application
 
@@ -80,10 +80,10 @@ The same builder can point directly at a remote application:
     --webview-url https://app.example.com
 ```
 
-Remote content should be combined with an explicit trusted-origin policy when additional origins need access to `NativeBridge`. See [WebView and trusted origins](WEBVIEW.md).
+Remote content should be combined with an explicit trusted-origin policy when additional origins need access to `NativeBridge`. See [WebView and trusted origins](webview.md).
 
 ## Next step
 
-- [Configuration](CONFIGURATION.md) - customize the app and select optional capabilities.
-- [Android APIs](ANDROID_APIS.md) - call Android functionality from JavaScript.
+- [Configuration](configuration.md) - customize the app and select optional capabilities.
+- [Android APIs](android_apis.md) - call Android functionality from JavaScript.
 - [Advanced documentation](advanced/index.md) - explore the generated app and integration internals.

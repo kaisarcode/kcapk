@@ -43,7 +43,7 @@ The separation is deliberate:
 
 Disabled APIs are absent rather than exposed as methods that merely fail. Their dedicated Java bridge classes are also left out of the generated project when they are not needed.
 
-See [Android APIs](ANDROID_APIS.md) and the detailed [API reference](apis/README.md).
+See [Android APIs](android_apis.md) and the detailed [API reference](apis/readme.md).
 
 ## Trust boundary
 
@@ -51,7 +51,7 @@ API selection does not replace origin trust checks. The bridge is available only
 
 Packaged local assets are trusted automatically. Remote applications use origin matching and optional `--trusted-origin` entries.
 
-See [WebView and trusted origins](WEBVIEW.md).
+See [WebView and trusted origins](webview.md).
 
 ## Synchronous and asynchronous methods
 
@@ -80,7 +80,7 @@ var file = await NativeBridge.Android.files.open({ type: "*/*" });
 
 KCAPK does not provide separate sync and async variants of the same operation. An operation uses a Promise when its result is inherently deferred.
 
-The Promise/request mechanism, page-generation protection, lifecycle behavior, and common errors are documented in [Async operations](ASYNC.md).
+The Promise/request mechanism, page-generation protection, lifecycle behavior, and common errors are documented in [Async operations](async.md).
 
 ## Error model
 
@@ -112,11 +112,11 @@ API selection and Android permissions are independent build concerns:
 
 `--api notifications` includes the notification API. `--api permissions` includes the runtime permission API. `--permission notifications` declares the Android notification permission.
 
-See [Configuration](CONFIGURATION.md).
+See [Configuration](configuration.md).
 
 ## External executables
 
-Packaging native programs, ABI handling, the executable whitelist, and the Promise returned by `NativeBridge.exec()` are documented in [External binaries](EXTERNAL_BINARIES.md).
+Packaging native programs, ABI handling, the executable whitelist, and the Promise returned by `NativeBridge.exec()` are documented in [External binaries](external_binaries.md).
 
 ## Implementation boundary
 
@@ -128,5 +128,5 @@ The shared async infrastructure is included automatically only when selected fea
 
 ## Next step
 
-- [Android APIs](ANDROID_APIS.md) - find available application-facing APIs.
-- [Async operations](ASYNC.md) - understand Promise request and lifecycle behavior.
+- [Android APIs](android_apis.md) - find available application-facing APIs.
+- [Async operations](async.md) - understand Promise request and lifecycle behavior.
