@@ -62,3 +62,7 @@ Every API page documents:
 - practical examples.
 
 When a new public Android API is added to KCAPK, it should also receive a page in this directory.
+
+## Next step
+
+Continue with [core](core.md).

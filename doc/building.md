@@ -112,4 +112,4 @@ Because the builder intentionally avoids Gradle, compatibility depends directly 
 
 ## Next step
 
-- [Getting started](getting_started.md) - build and install your first app.
+Continue with [configuration](configuration.md).

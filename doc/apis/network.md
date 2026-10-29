@@ -37,3 +37,7 @@ No runtime permission dialog is required.
 The result represents Android's current connectivity state. It does not guarantee that a particular host is reachable or that Internet traffic will succeed.
 
 The method is synchronous.
+
+## Next step
+
+Continue with [permissions](permissions.md).

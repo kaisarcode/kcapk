@@ -27,3 +27,7 @@ This keeps the default NativeBridge surface minimal and makes additional capabil
 ## Trust boundary
 
 Like every NativeBridge method, `showToast()` is callable only while the current top-level WebView page is trusted.
+
+## Next step
+
+Continue with [network](network.md).

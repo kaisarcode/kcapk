@@ -319,4 +319,4 @@ For application-owned Java code, Android resources, and manifest declarations, s
 
 ## Next step
 
-- [WebView and trusted origins](webview.md) - load local or remote pages safely.
+Continue with [webview](webview.md).

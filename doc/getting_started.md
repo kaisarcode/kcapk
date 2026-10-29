@@ -84,4 +84,4 @@ Remote content should be combined with an explicit trusted-origin policy when ad
 
 ## Next step
 
-- [Configuration](configuration.md) - customize the app and select optional capabilities.
+Continue with [building](building.md).

@@ -123,4 +123,4 @@ See [NativeBridge](native_bridge.md), [Android APIs](android_apis.md), and [Exte
 
 ## Next step
 
-- [Android APIs](android_apis.md) - enable native features for trusted pages.
+Continue with [android apis](android_apis.md).

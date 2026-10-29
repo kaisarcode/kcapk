@@ -88,3 +88,7 @@ NativeBridge.Android.notifications.cancelAll();
 ```
 
 All notification methods are synchronous NativeBridge operations.
+
+## Next step
+
+Continue with [alarms](alarms.md).
