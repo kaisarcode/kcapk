@@ -35,4 +35,4 @@ Clipboard behavior remains subject to Android's platform-level privacy and foreg
 
 ## Next step
 
-Continue with [screen](screen.md).
+Continue with [Core](core.md).

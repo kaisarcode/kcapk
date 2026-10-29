@@ -45,19 +45,19 @@ Permissions remain separate from API selection. For example:
 
 | Build option | JavaScript API | Default | Notes |
 |---|---|---|---|
-| core | `NativeBridge.Android.showToast()` | yes | Minimal always-present bridge. |
-| `--api network` | `NativeBridge.Android.isOnline()` | no | Adds network-state inspection. |
-| `--api permissions` | `NativeBridge.Android.permissions.*` | no | Runtime permission and special-access flows. |
-| `--api notifications` | `NativeBridge.Android.notifications.*` | no | Notification channels and posting. |
 | `--api alarms` | `NativeBridge.Android.alarms.*` | no | Native alarms, persistence, boot restore. |
+| `--api apps` | `NativeBridge.Android.apps.*` | no | Launcher app discovery, launching, Home role. |
+| `--api clipboard` | `NativeBridge.Android.clipboard.*` | no | Clipboard read/write operations. |
+| core | `NativeBridge.Android.showToast()` | yes | Minimal always-present bridge. |
+| `--api files` | `NativeBridge.Android.files.*` | no | Android document picker. |
 | `--api haptics` | `NativeBridge.Android.haptics.*` | no | Vibration and predefined haptic effects. |
 | `--api intents` | `NativeBridge.Android.intents.*` | no | Sharing, URL/settings intents, incoming shares. |
-| `--api files` | `NativeBridge.Android.files.*` | no | Android document picker. |
-| `--api apps` | `NativeBridge.Android.apps.*` | no | Launcher app discovery, launching, Home role. |
+| `--api network` | `NativeBridge.Android.isOnline()` | no | Adds network-state inspection. |
+| `--api notifications` | `NativeBridge.Android.notifications.*` | no | Notification channels and posting. |
+| `--api permissions` | `NativeBridge.Android.permissions.*` | no | Runtime permission and special-access flows. |
 | `--api resources` | `NativeBridge.Android.resources.*` | no | Generic Android resource metadata. |
-| `--api system-ui` | `NativeBridge.Android.systemUI.*` | no | System-bar appearance and visibility. |
-| `--api clipboard` | `NativeBridge.Android.clipboard.*` | no | Clipboard read/write operations. |
 | `--api screen` | `NativeBridge.Android.screen.*` | no | Keep-screen-on behavior. |
+| `--api system-ui` | `NativeBridge.Android.systemUI.*` | no | System-bar appearance and visibility. |
 | `--api voice` | `NativeBridge.Android.voice.*` | no | System speech-to-text via the device recognizer. |
 
 ## Internal dependencies

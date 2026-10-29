@@ -8,20 +8,20 @@ Only `showToast()` is part of the always-present core. Every other capability is
 
 | API | Activation | JavaScript surface |
 |---|---|---|
-| [Core](core.md) | always enabled | `NativeBridge.Android.showToast()` |
-| [Network](network.md) | `--api network` | `NativeBridge.Android.isOnline()` |
-| [Permissions](permissions.md) | `--api permissions` | `NativeBridge.Android.permissions.*` |
-| [Notifications](notifications.md) | `--api notifications` | `NativeBridge.Android.notifications.*` |
 | [Alarms](alarms.md) | `--api alarms` | `NativeBridge.Android.alarms.*` |
+| [Apps and launcher](apps.md) | `--api apps` | `NativeBridge.Android.apps.*` |
+| [Clipboard](clipboard.md) | `--api clipboard` | `NativeBridge.Android.clipboard.*` |
+| [Core](core.md) | always enabled | `NativeBridge.Android.showToast()` |
+| [Files](files.md) | `--api files` | `NativeBridge.Android.files.*` |
 | [Haptics](haptics.md) | `--api haptics` | `NativeBridge.Android.haptics.*` |
 | [Intents](intents.md) | `--api intents` | `NativeBridge.Android.intents.*` |
-| [Files](files.md) | `--api files` | `NativeBridge.Android.files.*` |
-| [Apps and launcher](apps.md) | `--api apps` | `NativeBridge.Android.apps.*` |
+| [Network](network.md) | `--api network` | `NativeBridge.Android.isOnline()` |
+| [Notifications](notifications.md) | `--api notifications` | `NativeBridge.Android.notifications.*` |
+| [Permissions](permissions.md) | `--api permissions` | `NativeBridge.Android.permissions.*` |
 | [Resources](resources.md) | `--api resources` | `NativeBridge.Android.resources.*` |
-| [System UI](system-ui.md) | `--api system-ui` | `NativeBridge.Android.systemUI.*` |
-| [Clipboard](clipboard.md) | `--api clipboard` | `NativeBridge.Android.clipboard.*` |
-| [Voice](voice.md) | `--api voice` | `NativeBridge.Android.voice.*` |
 | [Screen](screen.md) | `--api screen` | `NativeBridge.Android.screen.*` |
+| [System UI](system-ui.md) | `--api system-ui` | `NativeBridge.Android.systemUI.*` |
+| [Voice](voice.md) | `--api voice` | `NativeBridge.Android.voice.*` |
 
 ## Activation model
 
@@ -65,4 +65,4 @@ When a new public Android API is added to KCAPK, it should also receive a page i
 
 ## Next step
 
-Continue with [core](core.md).
+Continue with [Alarms](alarms.md).

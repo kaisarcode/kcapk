@@ -101,4 +101,4 @@ The user remains in control of the default launcher. Enabling the alias only mak
 
 ## Next step
 
-Continue with [resources](resources.md).
+Continue with [Clipboard](clipboard.md).

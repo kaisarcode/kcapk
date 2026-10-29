@@ -92,4 +92,4 @@ The public alarm methods are synchronous.
 
 ## Next step
 
-Continue with [haptics](haptics.md).
+Continue with [Apps](apps.md).
