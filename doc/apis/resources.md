@@ -77,4 +77,4 @@ The method is asynchronous and uses the shared Promise/page-generation infrastru
 
 ## Next step
 
-Continue with [system ui](system-ui.md).
+Continue with [Screen](screen.md).

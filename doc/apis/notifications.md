@@ -91,4 +91,4 @@ All notification methods are synchronous NativeBridge operations.
 
 ## Next step
 
-Continue with [alarms](alarms.md).
+Continue with [Permissions](permissions.md).

@@ -47,4 +47,4 @@ All methods are synchronous.
 
 ## Next step
 
-Continue with [clipboard](clipboard.md).
+Continue with [Voice](voice.md).

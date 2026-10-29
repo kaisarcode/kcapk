@@ -44,4 +44,4 @@ See [WebView](../webview.md) and [Async operations](../async.md).
 
 ## Next step
 
-Continue with [external binaries](../external_binaries.md).
+Continue with [External binaries](../external_binaries.md).

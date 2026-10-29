@@ -84,4 +84,4 @@ See [Async operations](../async.md).
 
 ## Next step
 
-Continue with [notifications](notifications.md).
+Continue with [Resources](resources.md).
