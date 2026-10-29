@@ -26,8 +26,6 @@ For the first setup and device installation, follow [Getting started](doc/gettin
 
 ## Documentation
 
-Start with the task you want to complete:
-
 - [Getting started](doc/getting-started.md) - build and install a first app.
 - [Building](doc/building.md) - install the required tools and understand build output.
 - [Configuration](doc/configuration.md) - choose application names, appearance, APIs, permissions, and options.
