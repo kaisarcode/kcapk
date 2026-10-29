@@ -22,7 +22,7 @@ Build an application from a local web page at `web/index.html`:
 
 The APK is written to `build/myapp/bin/myapp.apk`. KCAPK packages the entry file's containing directory, including adjacent assets.
 
-For the first setup and device installation, follow [Getting started](doc/getting-started.md) .
+For the first setup and device installation, follow [Getting started](doc/getting-started.md).
 
 ## Documentation
 
