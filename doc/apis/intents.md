@@ -96,4 +96,4 @@ All public intent methods are synchronous; Android's chooser or settings UI cont
 
 ## Next step
 
-Continue with [files](files.md).
+Continue with [Network](network.md).

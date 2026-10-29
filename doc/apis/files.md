@@ -57,4 +57,4 @@ The picker uses the shared Activity-result and Promise infrastructure. Cancellat
 
 ## Next step
 
-Continue with [apps](apps.md).
+Continue with [Haptics](haptics.md).

@@ -30,4 +30,4 @@ Like every NativeBridge method, `showToast()` is callable only while the current
 
 ## Next step
 
-Continue with [network](network.md).
+Continue with [Files](files.md).

@@ -44,4 +44,4 @@ All methods are synchronous.
 
 ## Next step
 
-Continue with [intents](intents.md).
+Continue with [Intents](intents.md).

@@ -40,4 +40,4 @@ The method is synchronous.
 
 ## Next step
 
-Continue with [permissions](permissions.md).
+Continue with [Notifications](notifications.md).
