@@ -76,7 +76,7 @@ Internal dependencies do not automatically expose public APIs. For example, alar
 
 The shared async implementation is included only when `--exec` or an enabled asynchronous Android capability requires it.
 
-See [Android APIs](android_apis.md) and the [detailed API reference](apis/readme.md).
+See [Android APIs](android-apis.md) and the [detailed API reference](apis/readme.md).
 
 ## Application native extensions
 
@@ -118,7 +118,7 @@ This namespace exposes selected Android platform primitives. KCAPK does not atte
 
 Except for the small core, Android APIs are opt-in at build time.
 
-See [Android APIs](android_apis.md).
+See [Android APIs](android-apis.md).
 
 ### External native binaries
 
@@ -128,7 +128,7 @@ NativeBridge.exec(...)
 
 This is separate from `NativeBridge.Android` because it does not represent an Android framework API. It is generated only when binaries are explicitly packaged with `--exec` and executes only those packaged binaries.
 
-See [External binaries](external_binaries.md).
+See [External binaries](external-binaries.md).
 
 ## Permissions and capabilities
 
@@ -160,4 +160,4 @@ This keeps the builder reusable across unrelated applications.
 
 ## Next step
 
-Continue with [native bridge](native_bridge.md).
+Continue with [native bridge](native-bridge.md).

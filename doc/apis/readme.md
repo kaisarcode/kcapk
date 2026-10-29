@@ -48,7 +48,7 @@ All APIs are available only to trusted top-level WebView content. See [WebView a
 
 Methods are synchronous unless their page explicitly says they return a Promise. Promise behavior, page-generation protection, and common error codes are documented in [Async operations](../async.md).
 
-`NativeBridge.exec()` is outside this directory because it is a KCAPK executable facility rather than an Android namespace. See [External binaries](../external_binaries.md).
+`NativeBridge.exec()` is outside this directory because it is a KCAPK executable facility rather than an Android namespace. See [External binaries](../external-binaries.md).
 
 ## Documentation convention
 

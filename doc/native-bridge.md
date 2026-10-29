@@ -43,7 +43,7 @@ The separation is deliberate:
 
 Disabled APIs are absent rather than exposed as methods that merely fail. Their dedicated Java bridge classes are also left out of the generated project when they are not needed.
 
-See [Android APIs](android_apis.md) and the detailed [API reference](apis/readme.md).
+See [Android APIs](android-apis.md) and the detailed [API reference](apis/readme.md).
 
 ## Trust boundary
 
@@ -116,7 +116,7 @@ See [Configuration](configuration.md).
 
 ## External executables
 
-Packaging native programs, ABI handling, the executable whitelist, and the Promise returned by `NativeBridge.exec()` are documented in [External binaries](external_binaries.md).
+Packaging native programs, ABI handling, the executable whitelist, and the Promise returned by `NativeBridge.exec()` are documented in [External binaries](external-binaries.md).
 
 ## Implementation boundary
 

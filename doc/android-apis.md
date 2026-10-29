@@ -76,7 +76,7 @@ See [Async operations](async.md) for request IDs, page generations, lifecycle be
 
 API selection is separate from trusted-origin enforcement. An enabled API is still callable only from WebView content KCAPK considers trusted.
 
-See [WebView and trusted origins](webview.md) and [NativeBridge](native_bridge.md).
+See [WebView and trusted origins](webview.md) and [NativeBridge](native-bridge.md).
 
 ## Adding APIs
 

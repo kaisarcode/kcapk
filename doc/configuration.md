@@ -189,7 +189,7 @@ Internal dependencies are resolved automatically. For example, alarms include th
 
 Native system speech recognition is enabled with `--api voice` and does not automatically grant browser microphone permission. Browser Web Speech additionally requires WebView support and an explicit Android microphone grant.
 
-See [Android APIs](android_apis.md) for the catalog and [API reference](apis/readme.md) for detailed pages.
+See [Android APIs](android-apis.md) for the catalog and [API reference](apis/readme.md) for detailed pages.
 
 ## Android permissions
 
@@ -298,7 +298,7 @@ See [Intents](apis/intents.md).
     --exec /path/to/x86_64/tool
 ```
 
-See [External binaries](external_binaries.md).
+See [External binaries](external-binaries.md).
 
 ## Release settings
 

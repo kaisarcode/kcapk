@@ -119,8 +119,8 @@ NativeBridge.exec(...)
 NativeBridge.Android.*
 ```
 
-See [NativeBridge](native_bridge.md), [Android APIs](android_apis.md), and [External binaries](external_binaries.md).
+See [NativeBridge](native-bridge.md), [Android APIs](android-apis.md), and [External binaries](external-binaries.md).
 
 ## Next step
 
-Continue with [android apis](android_apis.md).
+Continue with [android apis](android-apis.md).

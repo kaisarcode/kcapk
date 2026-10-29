@@ -22,18 +22,18 @@ Build an application from a local web page at `web/index.html`:
 
 The APK is written to `build/myapp/bin/myapp.apk`. KCAPK packages the entry file's containing directory, including adjacent assets.
 
-For the first setup and device installation, follow [Getting started](doc/getting_started.md).
+For the first setup and device installation, follow [Getting started](doc/getting-started.md).
 
 ## Documentation
 
 Start with the task you want to complete:
 
-- [Getting started](doc/getting_started.md) - build and install a first app.
+- [Getting started](doc/getting-started.md) - build and install a first app.
 - [Building](doc/building.md) - install the required tools and understand build output.
 - [Configuration](doc/configuration.md) - choose application names, appearance, APIs, permissions, and options.
 - [WebView](doc/webview.md) - use local or remote pages and configure trusted origins.
-- [Android APIs](doc/android_apis.md) - enable optional native capabilities and find individual API references.
-- [External binaries](doc/external_binaries.md) - package executables and invoke them from JavaScript.
+- [Android APIs](doc/android-apis.md) - enable optional native capabilities and find individual API references.
+- [External binaries](doc/external-binaries.md) - package executables and invoke them from JavaScript.
 - [Release builds](doc/releases.md) - produce and sign an Android App Bundle.
 - [Advanced documentation](doc/advanced/index.md) - architecture, bridge internals, asynchronous lifecycle, native extensions, and testing.
 

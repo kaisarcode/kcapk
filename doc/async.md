@@ -146,7 +146,7 @@ When the WebView moves to another page, running processes belonging to older pag
 
 When the Activity is destroyed, KCAPK destroys active processes and shuts down the executor.
 
-See [External binaries](external_binaries.md) for the complete executable integration model.
+See [External binaries](external-binaries.md) for the complete executable integration model.
 
 ## Permissions
 

@@ -65,7 +65,7 @@ The integration test does not compile that C source. Prebuilt Android fixtures a
 
 The full build packages them through `--exec` and verifies the resulting APK entries.
 
-See [External binaries](external_binaries.md) for the integration model.
+See [External binaries](external-binaries.md) for the integration model.
 
 ## Test application
 
