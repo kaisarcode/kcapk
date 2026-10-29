@@ -44,3 +44,7 @@ These operations affect the generated Activity while it is visible.
 On modern edge-to-edge Android versions, the visible system-bar background may be application content behind the bars rather than a separately painted bar color.
 
 All methods are synchronous.
+
+## Next step
+
+Continue with [clipboard](clipboard.md).

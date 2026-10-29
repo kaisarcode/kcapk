@@ -41,3 +41,7 @@ browser microphone path: `--local-https-assets`, `--api permissions`, and
 before calling `SpeechRecognition`. Browser support varies by device.
 
 See [WebView](../webview.md) and [Async operations](../async.md).
+
+## Next step
+
+Continue with [external binaries](../external_binaries.md).

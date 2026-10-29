@@ -54,3 +54,7 @@ The returned URI can be passed to other APIs, such as `NativeBridge.Android.inte
 ## Async lifecycle
 
 The picker uses the shared Activity-result and Promise infrastructure. Cancellation resolves `null`; native failures reject the Promise. Results belonging to stale WebView page generations are not delivered to a newer page.
+
+## Next step
+
+Continue with [apps](apps.md).

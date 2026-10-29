@@ -32,3 +32,7 @@ NativeBridge.Android.clipboard.clear();
 All methods are synchronous.
 
 Clipboard behavior remains subject to Android's platform-level privacy and foreground-access rules.
+
+## Next step
+
+Continue with [screen](screen.md).

@@ -41,3 +41,7 @@ On API 29+ KCAPK uses Android predefined vibration effects where available. Olde
 `cancel()` stops an active vibration when Android allows it.
 
 All methods are synchronous.
+
+## Next step
+
+Continue with [intents](intents.md).

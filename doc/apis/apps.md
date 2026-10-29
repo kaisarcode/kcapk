@@ -98,3 +98,7 @@ The user remains in control of the default launcher. Enabling the alias only mak
 ## Async methods
 
 `list()` and `icon()` return Promises and use the shared page-generation mechanism. `launch()`, `homeEnabled()`, `setHomeEnabled()`, and `openHomeSettings()` are synchronous.
+
+## Next step
+
+Continue with [resources](resources.md).

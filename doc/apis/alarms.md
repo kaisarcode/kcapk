@@ -89,3 +89,7 @@ NativeBridge.Android.alarms.cancelAll();
 ```
 
 The public alarm methods are synchronous.
+
+## Next step
+
+Continue with [haptics](haptics.md).

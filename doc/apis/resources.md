@@ -74,3 +74,7 @@ RESOURCE_LOOKUP_FAILED
 ```
 
 The method is asynchronous and uses the shared Promise/page-generation infrastructure.
+
+## Next step
+
+Continue with [system ui](system-ui.md).

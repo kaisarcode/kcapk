@@ -93,3 +93,7 @@ KCAPK does not read or copy incoming file contents. Android grants access to the
 The share is consumed once. A second call returns `null` until Android delivers another share.
 
 All public intent methods are synchronous; Android's chooser or settings UI continues independently after the Intent is launched.
+
+## Next step
+
+Continue with [files](files.md).
