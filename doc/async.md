@@ -259,4 +259,3 @@ The public API should expose only the natural Promise-returning method, not the 
 ## Next step
 
 - [Android API reference](apis/readme.md) - inspect individual methods and errors.
-- [Advanced documentation](advanced/index.md) - return to the technical documentation index.

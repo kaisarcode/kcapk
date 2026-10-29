@@ -113,4 +113,3 @@ Because the builder intentionally avoids Gradle, compatibility depends directly 
 ## Next step
 
 - [Getting started](getting_started.md) - build and install your first app.
-- [Configuration](configuration.md) - customize the generated application.

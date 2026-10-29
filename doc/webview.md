@@ -124,4 +124,3 @@ See [NativeBridge](native_bridge.md), [Android APIs](android_apis.md), and [Exte
 ## Next step
 
 - [Android APIs](android_apis.md) - enable native features for trusted pages.
-- [NativeBridge](native_bridge.md) - understand the bridge security and lifecycle model.

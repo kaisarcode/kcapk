@@ -161,4 +161,3 @@ This keeps the builder reusable across unrelated applications.
 ## Next step
 
 - [NativeBridge](native_bridge.md) - understand the native integration boundary.
-- [Advanced documentation](advanced/index.md) - browse related implementation guides.

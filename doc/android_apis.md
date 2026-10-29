@@ -93,4 +93,3 @@ Every new public API should also receive a page under `doc/apis/` documenting ac
 ## Next step
 
 - [API reference](apis/readme.md) - find methods, permissions, and examples.
-- [External binaries](external_binaries.md) - run packaged native executables when needed.

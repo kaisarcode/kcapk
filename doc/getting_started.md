@@ -85,5 +85,3 @@ Remote content should be combined with an explicit trusted-origin policy when ad
 ## Next step
 
 - [Configuration](configuration.md) - customize the app and select optional capabilities.
-- [Android APIs](android_apis.md) - call Android functionality from JavaScript.
-- [Advanced documentation](advanced/index.md) - explore the generated app and integration internals.

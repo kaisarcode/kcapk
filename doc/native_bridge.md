@@ -129,4 +129,3 @@ The shared async infrastructure is included automatically only when selected fea
 ## Next step
 
 - [Android APIs](android_apis.md) - find available application-facing APIs.
-- [Async operations](async.md) - understand Promise request and lifecycle behavior.
