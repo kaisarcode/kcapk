@@ -41,5 +41,4 @@ See [WebView](../webview.md) and [Voice](../apis/voice.md).
 
 ## Next step
 
-- [Architecture](../architecture.md) - understand KCAPK's build and integration boundaries.
-
+Continue with [testing](../testing.md).

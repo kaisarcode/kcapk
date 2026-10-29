@@ -128,4 +128,4 @@ The shared async infrastructure is included automatically only when selected fea
 
 ## Next step
 
-- [Android APIs](android_apis.md) - find available application-facing APIs.
+Continue with [async](async.md).

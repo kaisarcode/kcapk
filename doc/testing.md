@@ -125,4 +125,4 @@ on a device. The native-extension button shows a Java-generated toast with a cal
 
 ## Next step
 
-- [Advanced documentation](advanced/index.md) - explore the architecture and integration guides.
+Continue with [Project README](../README.md).

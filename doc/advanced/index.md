@@ -17,4 +17,4 @@ These pages explain KCAPK's internal design and integration boundaries. To build
 
 ## Next step
 
-- [Architecture](../architecture.md) - understand how the generated app is assembled.
+Continue with [architecture](../architecture.md).

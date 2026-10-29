@@ -227,4 +227,4 @@ See [Testing](testing.md).
 
 ## Next step
 
-- [Release builds](releases.md) - package and sign the completed application.
+Continue with [releases](releases.md).

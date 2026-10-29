@@ -102,4 +102,4 @@ This keeps both artifacts based on the same KCAPK configuration.
 
 ## Next step
 
-- [Testing](testing.md) - validate generated artifacts and device behavior.
+Continue with [Advanced documentation](advanced/index.md).
